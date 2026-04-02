@@ -1,0 +1,128 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║         application-prod.yaml — PRODUCTION PROFILE              ║
+# ║  Active: SPRING_PROFILES_ACTIVE=prod                            ║
+# ║  ⚠️  KHÔNG hardcode bất kỳ secret nào ở đây!                    ║
+# ║  Mọi giá trị nhạy cảm phải đến từ Environment Variables         ║
+# ║  hoặc Vault/K8s Secrets.                                         ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+spring:
+  # ── PostgreSQL — production via env vars ──────────────────────────
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}?rewriteBatchedInserts=true&stringtype=unspecified&sslmode=${DB_SSL_MODE:disable}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: ChatBotPool-Prod
+      maximum-pool-size: 20           # Tối đa 20 connections tới DB
+      minimum-idle: 10               # Pre-warm 10 connections
+      connection-timeout: 3000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      keepalive-time: 60000
+      auto-commit: false              # CRITICAL: phải false để XACK an toàn sau DB commit
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 250
+        prepStmtCacheSqlLimit: 2048
+        useServerPrepStmts: true
+        reWriteBatchedInserts: true   # CRITICAL: PostgreSQL batch optimization
+        prepareThreshold: 1
+        defaultRowFetchSize: 500
+
+  # ── Flyway — KHÔNG baseline-on-migrate trên prod ─────────────────
+  flyway:
+    enabled: true
+    baseline-on-migrate: false        # Chỉ apply migration script, không tạo baseline mới
+
+  # ── JPA — production: không log SQL ──────────────────────────────
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        session:
+          events:
+            log:
+              LOG_QUERIES_SLOWER_THAN_MS: 2000  # Chỉ log query chậm hơn 2s
+
+  # ── Redis — production cluster ───────────────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      connect-timeout: 3000
+      timeout: 2000
+      repositories:
+        enabled: false
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: 1000ms
+          time-between-eviction-runs: 60000
+          test-on-borrow: true
+          test-while-idle: true
+          min-evictable-idle-time: 60000
+        shutdown-timeout: 5000
+        cluster:
+          refresh:
+            adaptive: true            # Auto-detect Redis Cluster topology changes
+
+  # ── Qdrant — production ───────────────────────────────────────────
+  ai:
+    vectorstore:
+      qdrant:
+        host: ${QDRANT_HOST}
+        port: ${QDRANT_PORT:6334}
+
+# ── Server ───────────────────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8080}
+
+# ── CORS — chỉ domain production ─────────────────────────────────────
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS}   # Ví dụ: https://yourdomain.com
+
+# ── Cookie — HTTPS bắt buộc trên production ──────────────────────────
+app:
+  cookie:
+    secure: ${APP_COOKIE_SECURE:true}   # true by default on prod; docker-compose có thể override nếu cần
+
+# ── Logging — tối giản, chỉ WARNING trở lên ──────────────────────────
+logging:
+  level:
+    root: WARN
+    dev.thanh.spring_ai: INFO         # Vẫn giữ INFO để theo dõi business logic
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+    org.springframework.ai: INFO
+    org.hibernate.SQL: WARN           # Tắt SQL log trên production
+    org.hibernate.SQL_SLOW: WARN      # Chỉ log slow query
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    org.hibernate.orm.connections.pooling: WARN
+    org.apache.tomcat.util.http.parser: WARN
+    com.zaxxer.hikari: WARN
+    io.lettuce.core: WARN
+    io.lettuce.core.protocol: WARN
+  file:
+    name: /var/log/spring-ai/application.log   # Ghi log ra file trên prod
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB
+      total-size-cap: 2GB
+      max-history: 30                 # Giữ log 30 ngày
+
+# ── Actuator — hạn chế exposure trên prod ────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics       # KHÔNG expose info, env, beans trên prod
+  endpoint:
+    health:
+      show-details: never             # Không lộ detail cho người ngoài

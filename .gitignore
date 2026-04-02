@@ -1,0 +1,57 @@
+### Environment & Secrets ###
+.env
+.env.*
+!.env.example
+src/main/resources/keys/
+*.p12
+*.jks
+
+### Build artifacts ###
+target/
+!**/src/main/**/target/
+!**/src/test/**/target/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### Maven Wrapper ###
+.mvn/wrapper/maven-wrapper.jar
+
+### Logs ###
+*.log
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### Agent / AI Tooling ###
+.agent/
+.gemini/
+
+### OS ###
+.DS_Store
+Thumbs.db
+
+### Spring Boot ###
+HELP.md

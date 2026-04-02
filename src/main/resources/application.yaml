@@ -1,0 +1,188 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║           application.yaml — BASE / COMMON CONFIG               ║
+# ║  Chứa cấu hình CHUNG cho mọi môi trường.                        ║
+# ║  Không chứa secrets. Không chứa giá trị environment-specific.   ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+spring:
+  application:
+    name: spring-ai
+
+  # ── Virtual Threads (Java 21+) ─────────────────────────────────────
+  threads:
+    virtual:
+      enabled: true
+
+  # ── Multipart Upload ───────────────────────────────────────────────
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  # ── JPA / Hibernate ────────────────────────────────────────────────
+  jpa:
+    hibernate:
+      ddl-auto: none                  # NEVER auto-create/drop schema
+    show-sql: false
+    open-in-view: false               # CRITICAL: avoid lazy-loading pitfalls
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 500
+          order_inserts: true
+          order_updates: true
+
+  # ── Flyway ─────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # ── JDBC Template ──────────────────────────────────────────────────
+  jdbc:
+    template:
+      fetch-size: 500
+
+  # ── AI — Google Gemini ─────────────────────────────────────────────
+  ai:
+    google:
+      genai:
+        api-key: ${GEMINI_API_KEY}
+        chat:
+          options:
+            model: gemini-2.5-flash
+        embedding:
+          api-key: ${GEMINI_API_KEY}
+        dimension: 768
+
+    # ── Vector Store — Qdrant ────────────────────────────────────────
+    vectorstore:
+      qdrant:
+        collection-name: spring
+        use-tls: false
+        initialize-schema: true
+
+# ── Server ─────────────────────────────────────────────────────────────
+server:
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: 800          # Virtual Thread rất nhẹ — tăng cao được
+      min-spare: 50
+    connection-timeout: 60000   # 60s — Gemini đôi khi chậm
+    keep-alive-timeout: 65000
+    max-connections: 8192
+    accept-count: 200
+  compression:
+    enabled: true
+    mime-types: application/json,text/event-stream   # SSE streaming
+    min-response-size: 512
+
+# ── RAG Pipeline ───────────────────────────────────────────────────────
+rag:
+  chunk-size: 2048
+  chunk-overlap: 256
+  collection-name: spring
+  embedding-dimension: 768
+  candidate-top-k: 10
+  candidate-similarity-threshold: 0.6
+  rerank-top-k: 3
+  rerank-model: "rerank-v3.5"
+
+# ── Cohere ─────────────────────────────────────────────────────────────
+cohere:
+  api-key: ${COHERE_API_KEY}
+
+# ── Redis Stream Consumer ───────────────────────────────────────────────
+redis:
+  stream:
+    name: chat:messages
+    consumer-group: chat-processor-group
+    consumer-name: ${HOSTNAME:worker-1}
+    dead-letter-stream: chat:messages:dlq
+    batch-size: 100
+    block-duration-ms: 500
+    scheduler-interval-ms: 1000
+    max-retry-attempts: 3
+    pending-check-interval-ms: 30000
+    pending-idle-threshold-ms: 300000   # 5 minutes
+    claim-min-idle-time-ms: 300000
+
+# ── Scheduler ──────────────────────────────────────────────────────────
+scheduler:
+  pool-size: 5
+
+# ── Session Activity Sync ──────────────────────────────────────────────
+session:
+  sync:
+    interval-ms: 10000
+    batch-size: 100
+    user-sessions-ttl-hours: 24
+
+# ── Rate Limiting ──────────────────────────────────────────────────────
+rate-limit:
+  # Layer 1 — Token Bucket (anti-spam, anti-crash)
+  bucket-capacity: 5
+  refill-rate-per-second: 1
+  # Layer 2 — Daily Token Quota
+  daily-token-limit: 100000
+
+# ── Retry ──────────────────────────────────────────────────────────────
+retry:
+  initial-interval-ms: 1000
+  multiplier: 2.0
+  max-interval-ms: 60000
+
+# ── Security ───────────────────────────────────────────────────────────
+security:
+  jwt:
+    public-key: classpath:keys/public.pem
+    private-key: classpath:keys/private.pem
+    access-token-duration-seconds: 900       # 15 minutes
+    refresh-token-duration-seconds: 604800   # 7 days
+    issuer: spring-ai
+  oauth2:
+    google:
+      client-id: ${GOOGLE_CLIENT_ID}
+
+# ── Resilience4j — Circuit Breaker ────────────────────────────────────
+resilience4j:
+  circuitbreaker:
+    instances:
+      llm-gemini:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 70
+        slow-call-duration-threshold: 20s
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - java.util.concurrent.TimeoutException
+          - java.io.IOException
+          - java.lang.RuntimeException
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+
+# ── Actuator / Metrics ─────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,circuitbreakers
+  health:
+    circuitbreakers:
+      enabled: true
+  endpoint:
+    health:
+      show-details: always
+
+# ── Log Pattern (chung) ────────────────────────────────────────────────
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

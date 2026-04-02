@@ -1,0 +1,98 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║           application-dev.yaml — DEV / LOCAL PROFILE            ║
+# ║  Active: SPRING_PROFILES_ACTIVE=dev (mặc định khi chạy IDE)     ║
+# ║  Mục tiêu: Debug nhanh, log chi tiết, không cần HTTPS.          ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+spring:
+  # ── PostgreSQL — local ────────────────────────────────────────────
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:chatbot}?rewriteBatchedInserts=true&stringtype=unspecified
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:password}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: ChatBotPool-Dev
+      maximum-pool-size: 10           # Nhỏ hơn prod — tiết kiệm tài nguyên local
+      minimum-idle: 3
+      connection-timeout: 5000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      keepalive-time: 60000
+      auto-commit: false
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 250
+        prepStmtCacheSqlLimit: 2048
+        reWriteBatchedInserts: true
+
+  # ── JPA — hiện SQL để debug ───────────────────────────────────────
+  jpa:
+    show-sql: false                   # Đã tắt để tránh trùng lặp log (do đã dùng logging.level.org.hibernate.SQL: DEBUG)
+    properties:
+      hibernate:
+        session:
+          events:
+            log:
+              LOG_QUERIES_SLOWER_THAN_MS: 0   # Log tất cả query (dev mode)
+
+  # ── Redis — local ────────────────────────────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 3000
+      timeout: 2000
+      repositories:
+        enabled: false
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 5
+          min-idle: 2
+          max-wait: 1000ms
+          time-between-eviction-runs: 60000
+          test-on-borrow: true
+          test-while-idle: true
+          min-evictable-idle-time: 60000
+        shutdown-timeout: 5000
+
+  # ── Qdrant — local ───────────────────────────────────────────────
+  ai:
+    vectorstore:
+      qdrant:
+        host: ${QDRANT_HOST:localhost}
+        port: ${QDRANT_PORT:6334}
+
+# ── Server port ───────────────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8080}
+
+# ── CORS — cho phép Vite dev server ──────────────────────────────────
+cors:
+  allowed-origins: http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:3000
+
+# ── Cookie — KHÔNG cần Secure vì dev chạy HTTP ───────────────────────
+app:
+  cookie:
+    secure: false         # localhost không có HTTPS
+
+# ── Logging — chi tiết tối đa để debug ───────────────────────────────
+logging:
+  level:
+    root: INFO
+    dev.thanh.spring_ai: DEBUG          # DEBUG toàn bộ source code của bạn
+    org.springframework.web: INFO       # Đổi thành INFO để bớt log rác
+    org.springframework.security: INFO  # Đổi thành INFO để bớt log rác
+    org.springframework.ai: INFO
+    org.hibernate.SQL: DEBUG            # Hiển thị SQL queries
+    org.hibernate.SQL_SLOW: INFO
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE  # Hiển thị SQL parameters
+    org.hibernate.orm.connections.pooling: WARN
+    org.apache.tomcat.util.http.parser: WARN
+    com.zaxxer.hikari: INFO             # Xem trạng thái Pool dạng INFO
+    io.lettuce.core: INFO
+    io.lettuce.core.protocol: WARN

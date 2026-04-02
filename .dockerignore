@@ -1,0 +1,25 @@
+# 1. Thư mục và file liên quan đến Git (Không cần thiết trong container)
+.git
+.gitignore
+.gitattributes
+
+# 2. Thư mục và file cấu hình IDE (Không cần thiết trong container)
+.idea
+*.iml
+*.iws
+*.ipr
+
+# 3. Thư mục build Maven (Chứa các file đã biên dịch, không cần thiết trong container)
+target
+**/target
+
+
+
+
+# 4. File cấu hình môi trường (Chứa thông tin nhạy cảm, không nên đưa vào container)
+.env
+
+
+# 5. File tài liệu và log (Không cần thiết trong container)
+HELP.md
+*.log

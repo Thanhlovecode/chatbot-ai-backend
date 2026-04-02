@@ -1,0 +1,22 @@
+# Profile: integration — used by @SpringBootTest with Testcontainers
+# Datasource, Redis, Qdrant URLs are auto-overridden by Testcontainers
+spring:
+  flyway:
+    enabled: false
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  ai:
+    google:
+      genai:
+        api-key: test-key
+    vectorstore:
+      qdrant:
+        host: localhost     # overridden by Testcontainers @DynamicPropertySource
+        port: 6334
+        collection-name: test-collection
+        uses-tls: false
+
+cors:
+  allowed-origins: http://localhost:5173
