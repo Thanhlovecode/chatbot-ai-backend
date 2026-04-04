@@ -94,4 +94,11 @@ public class RedisStreamProperties {
      */
     @Positive(message = "Claim min idle time must be positive")
     private long claimMinIdleTimeMs = 300000;
+
+    /**
+     * Number of parallel consumers within the same consumer group.
+     * Each consumer gets a unique name: {consumerName}-{index}
+     */
+    @Min(value = 1, message = "Concurrency must be at least 1")
+    private int concurrency = 3;
 }

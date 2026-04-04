@@ -102,10 +102,11 @@ redis:
     consumer-group: chat-processor-group
     consumer-name: ${HOSTNAME:worker-1}
     dead-letter-stream: chat:messages:dlq
-    batch-size: 100
+    batch-size: 200
     block-duration-ms: 500
     scheduler-interval-ms: 1000
     max-retry-attempts: 3
+    concurrency: 3
     pending-check-interval-ms: 30000
     pending-idle-threshold-ms: 300000   # 5 minutes
     claim-min-idle-time-ms: 300000

@@ -141,13 +141,11 @@ public class RedisStreamService {
 
 
     @SuppressWarnings("unchecked")
-    public int consumeNewMessages() {
+    public int consumeNewMessages(int consumerIndex) {
+        String consumerName = streamProperties.getConsumerName() + "-" + consumerIndex;
         try {
             List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
-                    Consumer.from(
-                            streamProperties.getConsumerGroup(),
-                            streamProperties.getConsumerName()
-                    ),
+                    Consumer.from(streamProperties.getConsumerGroup(), consumerName),
                     StreamReadOptions.empty()
                             .count(streamProperties.getBatchSize())
                             .block(Duration.ofMillis(streamProperties.getBlockDurationMs())),
@@ -158,11 +156,11 @@ public class RedisStreamService {
                 return 0;
             }
 
-            log.info("Read {} new messages from stream", records.size());
+            log.info("Consumer-{} read {} messages", consumerIndex, records.size());
             return processMessageBatch(records);
 
         } catch (Exception e) {
-            log.error("Error reading new messages from stream", e);
+            log.error("Consumer-{} error reading from stream", consumerIndex, e);
             return 0;
         }
     }

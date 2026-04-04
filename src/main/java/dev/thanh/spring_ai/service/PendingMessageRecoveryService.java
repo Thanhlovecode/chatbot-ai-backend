@@ -51,7 +51,7 @@ public class PendingMessageRecoveryService {
             return recovered;
 
         } catch (Exception e) {
-            log.error("Recovery failed: {}", e.getMessage());
+            log.error("Recovery failed", e); // stack trace đầy đủ
             return 0;
         }
     }
@@ -64,22 +64,28 @@ public class PendingMessageRecoveryService {
     private boolean claimAndProcess(PendingMessage pending) {
         try {
             String messageId = pending.getIdAsString();
+            String recoveryConsumer = props.getConsumerName() + "-recovery"; // tách khỏi active consumer
 
             List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream()
                     .claim(
                             props.getName(),
                             props.getConsumerGroup(),
-                            props.getConsumerName(),
+                            recoveryConsumer,
                             Duration.ofMillis(props.getClaimMinIdleTimeMs()),
                             RecordId.of(messageId)
                     );
 
             if (claimed == null || claimed.isEmpty()) {
-                log.warn("Failed to claim message {}", messageId);
+                log.warn("Failed to claim message {} — not yet idle enough or already claimed", messageId);
                 return false;
             }
 
-            streamConsumer.processMessageBatch(claimed);
+            int processed = streamConsumer.processMessageBatch(claimed); // check kết quả
+
+            if (processed == 0) {
+                log.warn("Claimed message {} but insert returned 0, will retry next cycle", messageId);
+                return false;
+            }
 
             log.info("Recovered message {} from {} (idle: {}ms, attempts: {})",
                     messageId, pending.getConsumerName(),
@@ -89,7 +95,7 @@ public class PendingMessageRecoveryService {
             return true;
 
         } catch (Exception e) {
-            log.error("Claim failed: {}", e.getMessage());
+            log.error("Claim failed for message {}", pending.getIdAsString(), e);
             return false;
         }
     }

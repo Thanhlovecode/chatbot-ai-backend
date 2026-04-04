@@ -1,5 +1,6 @@
 package dev.thanh.spring_ai.scheduler;
 
+import dev.thanh.spring_ai.config.RedisStreamProperties;
 import dev.thanh.spring_ai.service.PendingMessageRecoveryService;
 import dev.thanh.spring_ai.service.RedisStreamService;
 import lombok.RequiredArgsConstructor;
@@ -7,6 +8,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 
@@ -17,6 +22,8 @@ public class StreamConsumerScheduler {
 
     private final RedisStreamService streamConsumer;
     private final PendingMessageRecoveryService recoveryService;
+    private final RedisStreamProperties streamProperties;
+    private final Executor virtualThreadExecutor;
 
     private final AtomicBoolean consuming = new AtomicBoolean(false);
     private final AtomicBoolean recovering = new AtomicBoolean(false);
@@ -29,10 +36,28 @@ public class StreamConsumerScheduler {
         }
 
         try {
-            int processed = streamConsumer.consumeNewMessages();
+            int concurrency = streamProperties.getConcurrency();
+            List<CompletableFuture<Integer>> futures = new ArrayList<>(concurrency);
 
-            if (processed > 0) {
-                log.info("Processed {} messages", processed);
+            for (int i = 0; i < concurrency; i++) {
+                final int index = i;
+                futures.add(
+                        CompletableFuture
+                                .supplyAsync(() -> streamConsumer.consumeNewMessages(index), virtualThreadExecutor)
+                                .exceptionally(ex -> {
+                                    log.error("Consumer-{} failed: {}", index, ex.getMessage(), ex);
+                                    return 0;
+                                })
+                );
+            }
+
+            // .join() safe: timeout managed by Redis blockDurationMs, HikariCP connectionTimeout, PG statementTimeout
+            int total = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+                    .thenApply(v -> futures.stream().mapToInt(CompletableFuture::join).sum())
+                    .join();
+
+            if (total > 0) {
+                log.info("Processed {} messages across {} consumers", total, concurrency);
             }
 
         } catch (Exception e) {
@@ -45,7 +70,7 @@ public class StreamConsumerScheduler {
     @Scheduled(fixedRateString = "#{@redisStreamProperties.pendingCheckIntervalMs}")
     public void recoverPendingMessages() {
         if (!recovering.compareAndSet(false, true)) {
-            log.info("Recovery cycle skipped - previous still running");
+            log.debug("Recovery cycle skipped - previous still running");
             return;
         }
 
