@@ -7,6 +7,7 @@ import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOper
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -52,7 +53,8 @@ public class LlmService {
                 .doOnComplete(() -> log.info("Gemini stream completed"))
                 .doOnError(e -> log.error("Gemini stream error signal: ", e))
                 .timeout(Duration.ofSeconds(25)) // 1. TRONG CB — timeout được đếm là failure
-                .retryWhen(Retry.backoff(1, Duration.ofSeconds(2)) // 2. TRONG CB — retry không chạy khi CB OPEN
+                .retryWhen(Retry.backoff(2, Duration.ofMillis(500)) // 2. TRONG CB — retry không chạy khi CB OPEN
+                        .jitter(0.5)
                         .filter(this::isRetryableError)
                         .onRetryExhaustedThrow((spec, signal) -> signal.failure()))
                 // ── CB bọc ngoài cùng: timeout + retry đều nằm trong CB scope ──
@@ -77,6 +79,9 @@ public class LlmService {
                 Message: %s
                 """.formatted(userMsg);
         return Mono.fromCallable(() -> chatClient.prompt()
+                .options(GoogleGenAiChatOptions.builder()
+                        .model("gemini-2.0-flash-lite")
+                        .build())
                 .user(titlePrompt)
                 .call()
                 .content())
