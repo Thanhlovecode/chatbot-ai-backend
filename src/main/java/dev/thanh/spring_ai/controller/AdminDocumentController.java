@@ -5,6 +5,7 @@ import dev.thanh.spring_ai.dto.response.admin.DocumentDto;
 import dev.thanh.spring_ai.service.AdminDocumentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -20,6 +21,7 @@ import java.util.UUID;
 @PreAuthorize("hasRole('ADMIN')")
 @Slf4j
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
 public class AdminDocumentController {
 
     private final AdminDocumentService adminDocumentService;

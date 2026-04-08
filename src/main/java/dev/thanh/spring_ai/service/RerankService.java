@@ -9,6 +9,7 @@ import dev.thanh.spring_ai.config.HybridRagProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -28,6 +29,7 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 @Slf4j(topic = "RERANK-SERVICE")
+@ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
 public class RerankService {
 
     private final CohereApiClient cohereClient;

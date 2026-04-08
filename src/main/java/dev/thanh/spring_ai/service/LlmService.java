@@ -9,6 +9,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -23,7 +24,8 @@ import java.util.concurrent.TimeoutException;
 
 @Service
 @Slf4j
-public class LlmService {
+@ConditionalOnProperty(name = "llm.mock.enabled", havingValue = "false", matchIfMissing = true)
+public class LlmService implements LlmServicePort {
 
     private static final String CB_NAME = "llm-gemini";
 
@@ -52,6 +54,9 @@ public class LlmService {
                 .doOnNext(token -> log.debug("Gemini received token: '{}' ", token.replace("\n", "\\n")))
                 .doOnComplete(() -> log.info("Gemini stream completed"))
                 .doOnError(e -> log.error("Gemini stream error signal: ", e))
+                // Buffer 256 tokens để chịu được downstream SSE client chậm (backpressure)
+                // Ngăn FluxInterval.timeout() bị OverflowException khi buffer đầy
+                .onBackpressureBuffer(256)
                 .timeout(Duration.ofSeconds(25)) // 1. TRONG CB — timeout được đếm là failure
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(500)) // 2. TRONG CB — retry không chạy khi CB OPEN
                         .jitter(0.5)

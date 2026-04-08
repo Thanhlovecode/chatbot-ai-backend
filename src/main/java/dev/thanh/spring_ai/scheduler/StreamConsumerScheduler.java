@@ -58,6 +58,11 @@ public class StreamConsumerScheduler {
 
             if (total > 0) {
                 log.info("Processed {} messages across {} consumers", total, concurrency);
+
+                // Trim stream sau mỗi vòng consume để ngăn tích lũy vô hạn.
+                // Đặt ở scheduler (single-thread) thay vì processMessageBatch (parallel)
+                // để tránh race condition. approximateTrimming = true → chi phí CPU ≈ 0.
+                streamConsumer.trimStream(50_000);
             }
 
         } catch (Exception e) {

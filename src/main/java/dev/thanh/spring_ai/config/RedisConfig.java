@@ -6,16 +6,13 @@ import io.lettuce.core.SocketOptions;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
-import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
+import org.springframework.boot.autoconfigure.data.redis.LettuceClientConfigurationBuilderCustomizer;
 import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
@@ -30,53 +27,48 @@ import static com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY;
 @Slf4j
 public class RedisConfig {
 
-    private final RedisProperties redisProperties;
     private final RedisStreamProperties redisStreamProperties;
     private final ObjectMapper objectMapper;
 
 
+    /**
+     * Customize Lettuce client options while letting Spring Boot auto-configure
+     * LettuceConnectionFactory from application*.yaml (including pool settings).
+     *
+     * Tại sao dùng Customizer thay vì @Bean LettuceConnectionFactory?
+     * → Khi tự tạo @Bean LettuceConnectionFactory, Spring Boot AUTO-CONFIG bị SKIP hoàn toàn.
+     *   Tức là tất cả config trong YAML (host, port, password, pool) đều bị ignore.
+     * → Dùng Customizer: Spring Boot VẪN tự tạo factory từ YAML, chỉ thêm custom options.
+     *   → Pool config (max-active, max-idle, ...) trong YAML được áp dụng đúng.
+     */
     @Bean
-    public LettuceConnectionFactory redisConnectionFactory() {
-        RedisStandaloneConfiguration serverConfig = new RedisStandaloneConfiguration();
-        serverConfig.setHostName(redisProperties.getHost());
-        serverConfig.setPort(redisProperties.getPort());
+    public LettuceClientConfigurationBuilderCustomizer lettuceCustomizer() {
+        return builder -> {
+            SocketOptions socketOptions = SocketOptions.builder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .keepAlive(true)
+                    .tcpNoDelay(true)
+                    .build();
 
-        String redisPassword = redisProperties.getPassword();
+            ClientOptions clientOptions = ClientOptions.builder()
+                    .socketOptions(socketOptions)
+                    .autoReconnect(true)
+                    .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
+                    .build();
 
-        if (redisPassword != null && !redisPassword.isBlank()) {
-            serverConfig.setPassword(redisPassword);
-        }
+            builder.clientOptions(clientOptions)
+                    .commandTimeout(Duration.ofSeconds(30))
+                    .shutdownTimeout(Duration.ofSeconds(2));
 
-        SocketOptions socketOptions = SocketOptions.builder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .keepAlive(true)
-                .tcpNoDelay(true) // Disable Nagle's algorithm for lower latency
-                .build();
-
-        ClientOptions clientOptions = ClientOptions.builder()
-                .socketOptions(socketOptions)
-                .autoReconnect(true)
-                .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
-                .build();
-
-        LettuceClientConfiguration clientConfig = LettuceClientConfiguration.builder()
-                .clientOptions(clientOptions)
-                .commandTimeout(Duration.ofSeconds(30))
-                .shutdownTimeout(Duration.ofSeconds(2))
-                .build();
-
-        LettuceConnectionFactory factory = new LettuceConnectionFactory(serverConfig, clientConfig);
-        factory.setShareNativeConnection(true); // Connection multiplexing
-        factory.setValidateConnection(true);
-
-        return factory;
+            log.info("✅ Lettuce client customized: keepAlive, tcpNoDelay, autoReconnect, REJECT on disconnect");
+        };
     }
 
 
     @Bean
-    public RedisTemplate<String, Object> redisTemplate() {
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory connectionFactory) {
         RedisTemplate<String, Object> redisTemplate = new RedisTemplate<>();
-        redisTemplate.setConnectionFactory(redisConnectionFactory());
+        redisTemplate.setConnectionFactory(connectionFactory);
 
         ObjectMapper redisObjectMapper = createRedisObjectMapper();
 
@@ -92,7 +84,7 @@ public class RedisConfig {
 
         redisTemplate.afterPropertiesSet();
 
-        log.info("✅ RedisTemplate configured");
+        log.info("✅ RedisTemplate configured with pool-backed connection factory");
 
         return redisTemplate;
     }

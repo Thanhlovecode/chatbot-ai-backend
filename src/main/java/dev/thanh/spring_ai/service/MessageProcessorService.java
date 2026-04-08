@@ -32,6 +32,19 @@ public class MessageProcessorService {
                 return null;
             }
 
+            // Guard: UUID string phải đúng 36 ký tự (8-4-4-4-12). Nếu data bị corrupted từ
+            // Redis (do connection strained), UUID.fromString() sẽ throw IllegalArgumentException.
+            if (id == null || id.length() > 36 || id.length() < 32) {
+                log.warn("Invalid id field '{}' in record {} (length={}), skipping",
+                        id, messageId, id != null ? id.length() : 0);
+                return null;
+            }
+            if (sessionId.length() > 36 || sessionId.length() < 32) {
+                log.warn("Invalid sessionId field '{}' in record {} (length={}), skipping",
+                        sessionId, messageId, sessionId.length());
+                return null;
+            }
+
             return ChatMessage.builder()
                     .id(UUID.fromString(id))
                     .messageId(messageId)

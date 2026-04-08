@@ -11,6 +11,7 @@ import io.qdrant.client.grpc.Points;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,7 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
 public class AdminDocumentService {
 
     private final DocumentRepository documentRepository;

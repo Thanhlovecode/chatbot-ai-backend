@@ -6,6 +6,7 @@ import dev.thanh.spring_ai.service.RagService;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,6 +20,7 @@ import java.time.ZonedDateTime;
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/rag")
 @Slf4j(topic = "RAG-CONTROLLER")
+@ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
 public class RagController {
 
     private final RagService ragService;

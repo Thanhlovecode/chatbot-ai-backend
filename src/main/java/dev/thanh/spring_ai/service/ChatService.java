@@ -31,8 +31,8 @@ import java.util.concurrent.Executor;
 public class ChatService {
 
     private final RedisStreamService redisStreamService;
-    private final RagService ragService;
-    private final LlmService llmService;
+    private final RagServicePort ragService;
+    private final LlmServicePort llmService;
     private final UuidV7Generator uuidV7Generator;
     private final ChatSessionService chatSessionService;
     private final SessionActivityService sessionActivityService;
@@ -53,8 +53,12 @@ public class ChatService {
 
             String sessionId = chatSessionService.getOrCreateSession(request.sessionId(), userId);
 
-            // Touch session activity — cập nhật ZSET 1 (User Sessions) + ZSET 2 (Dirty) trong 1 pipeline
-            sessionActivityService.touchSession(userId, sessionId);
+            // Touch session activity — fire-and-forget async để Redis failure KHÔNG block request path.
+            // Nếu Redis lỗi, SessionActivityService đã catch + log WARN → DB sẽ có stale updatedAt (acceptable).
+            CompletableFuture.runAsync(
+                () -> sessionActivityService.touchSession(userId, sessionId),
+                virtualThreadExecutor
+            );
 
             CompletableFuture<List<Message>> historyFuture = loadHistoryAsync(sessionId, isNewSession);
 
@@ -80,7 +84,14 @@ public class ChatService {
                     })
                     .onErrorResume(RateLimitException.class, e -> Flux.error(e))
                     .onErrorResume(e -> !(e instanceof RateLimitException), e -> {
-                        log.error("Chat stream pipeline error: ", e);
+                        // Phân loại lỗi: client disconnect → WARN, infrastructure error → ERROR
+                        // Đảm bảo production vẫn trigger alert cho lỗi thật (LLM timeout, DB failure)
+                        // mà không bị noise từ client tự ngắt kết nối
+                        if (isClientDisconnect(e)) {
+                            log.warn("Client disconnected during stream: {}", e.getMessage());
+                        } else {
+                            log.error("Chat stream pipeline error: {}", e.getMessage());
+                        }
                         return Flux.just(ChatResponse.builder()
                                 .sessionId(sessionId)
                                 .content("Xin lỗi, đã xảy ra lỗi: " + e.getMessage())
@@ -204,6 +215,29 @@ public class ChatService {
                 .title(title)
                 .type(ResponseType.TITLE)
                 .build();
+    }
+
+    /**
+     * Phân biệt lỗi do client tự ngắt kết nối (Connection reset, Broken pipe)
+     * với lỗi infrastructure thực sự (LLM timeout, DB failure).
+     * Client disconnect → log.warn (không trigger alert)
+     * Infrastructure error → log.error (trigger alert trên Grafana/Alertmanager)
+     */
+    private boolean isClientDisconnect(Throwable e) {
+        String msg = e.getMessage();
+        if (msg != null) {
+            String lowerMsg = msg.toLowerCase();
+            if (lowerMsg.contains("connection reset")
+                    || lowerMsg.contains("broken pipe")
+                    || lowerMsg.contains("an established connection was aborted")
+                    || lowerMsg.contains("client disconnected")) {
+                return true;
+            }
+        }
+        // IOException hoặc cause là IOException thường là network issue từ phía client
+        Throwable cause = e.getCause();
+        return (e instanceof java.io.IOException)
+                || (cause instanceof java.io.IOException);
     }
 
 }

@@ -62,28 +62,29 @@ public class JobRegistryService {
         // 1. Calculate Stats
         long totalJobs = 1; // Initially just "crawl-all" logic
         long runningJobs = jobRunningLocks.values().stream().filter(AtomicBoolean::get).count();
-        
+
         LocalDateTime today = LocalDate.now().atStartOfDay();
         long successToday = jobExecutionRepository.countSuccessSince(today);
         long failedToday = jobExecutionRepository.countFailedSince(today);
-        
+
         JobStatsDto stats = JobStatsDto.builder()
                 .totalJobs(totalJobs)
                 .runningJobs(runningJobs)
                 .successfulJobsToday(successToday)
                 .failedJobsToday(failedToday)
                 .build();
-                
+
         // 2. Build Job list
         List<BackgroundJobDto> jobs = new ArrayList<>();
-        
+
         // --- CRAWL ALL JOB ---
         boolean isCrawlAllRunning = jobRunningLocks.get(JOB_CRAWL_ALL).get();
-        JobExecution lastCrawlAll = jobExecutionRepository.findTopByJobIdOrderByStartedAtDesc(JOB_CRAWL_ALL).orElse(null);
-        
-        JobStatus status = isCrawlAllRunning ? JobStatus.RUNNING :
-                (lastCrawlAll != null ? lastCrawlAll.getStatus() : JobStatus.IDLE);
-                
+        JobExecution lastCrawlAll = jobExecutionRepository.findTopByJobIdOrderByStartedAtDesc(JOB_CRAWL_ALL)
+                .orElse(null);
+
+        JobStatus status = isCrawlAllRunning ? JobStatus.RUNNING
+                : (lastCrawlAll != null ? lastCrawlAll.getStatus() : JobStatus.IDLE);
+
         jobs.add(BackgroundJobDto.builder()
                 .jobId(JOB_CRAWL_ALL)
                 .jobName("Crawl All Active Sources")
@@ -93,22 +94,22 @@ public class JobRegistryService {
                 .lastDurationMs(lastCrawlAll != null ? lastCrawlAll.getDurationMs() : null)
                 .status(status)
                 .build());
-                
+
         return JobListResponse.builder()
                 .stats(stats)
                 .jobs(jobs)
                 .build();
     }
 
-    public synchronized void triggerJob(String jobId) {
+    public void triggerJob(String jobId) {
         if (!jobRunningLocks.containsKey(jobId)) {
             throw new IllegalArgumentException("Unknown job ID: " + jobId);
         }
-        
+
         if (!jobRunningLocks.get(jobId).compareAndSet(false, true)) {
             throw new IllegalStateException("Job is already running");
         }
-        
+
         if (JOB_CRAWL_ALL.equals(jobId)) {
             triggerCrawlAllAsync();
         }

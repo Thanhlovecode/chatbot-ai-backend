@@ -11,6 +11,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -25,7 +26,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j(topic = "RAG-SERVICE")
-public class RagService {
+@ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
+public class RagService implements RagServicePort {
 
     private static final String NO_CONTEXT_MSG = "No specific context available from the internal knowledge base.";
 

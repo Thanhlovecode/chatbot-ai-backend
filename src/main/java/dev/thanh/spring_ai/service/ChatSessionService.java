@@ -21,6 +21,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -42,6 +43,7 @@ public class ChatSessionService {
     private final MessageRepository messageRepository;
     private final RedisStreamService redisStreamService;
     private final ApplicationEventPublisher eventPublisher;
+    private final TransactionTemplate transactionTemplate;
 
     @Transactional
     public Session createSessionWithTitle(String userId, String title) {
@@ -130,57 +132,72 @@ public class ChatSessionService {
                 .build();
     }
 
-    @Transactional
+    /**
+     * KHÔNG dùng @Transactional ở đây — tránh giữ DB connection khi gọi Redis cache.
+     * Chỉ khoanh vùng transaction đúng chỗ cần DB bằng TransactionTemplate.
+     */
     public String getOrCreateSession(String sessionId, String userId) {
+        // ── Case 1: Tạo session mới — chỉ INSERT cần transaction ──
         if (sessionId == null || sessionId.isEmpty()) {
-            Session newSession = Session.builder()
-                    .id(uuidV7Generator.generate())
-                    .userId(UUID.fromString(userId))
-                    .title("New Chat")
-                    .active(true)
-                    .build();
+            Session saved = transactionTemplate.execute(status -> {
+                Session newSession = Session.builder()
+                        .id(uuidV7Generator.generate())
+                        .userId(UUID.fromString(userId))
+                        .title("New Chat")
+                        .active(true)
+                        .build();
+                return sessionRepository.save(newSession);
+            }); // ← Connection trả lại NGAY tại đây!
 
-            Session saved = sessionRepository.save(newSession);
             log.info("Created new session [{}] for user [{}]", saved.getId(), userId);
-
+            // Event publish NGOÀI transaction — không giữ connection
             eventPublisher.publishEvent(new SessionCreatedEvent(this, saved));
             return saved.getId().toString();
         }
 
-        // Cache hit → trả về ngay, không cần xuống DB
+        // ── Case 2: Cache hit → trả về ngay, KHÔNG cần DB connection ──
         if (sessionCacheService.getIfCached(sessionId) != null) {
             return sessionId;
         }
 
+        // ── Case 3: Cache miss → query DB để validate, rồi cache kết quả ──
         UUID sid = UUID.fromString(sessionId);
         UUID uid = UUID.fromString(userId);
 
+        // findByIdAndActiveTrue() tự có @Transactional(readOnly=true) trong SimpleJpaRepository
+        // → connection chỉ bị giữ đúng lúc query (~0.1ms), KHÔNG bao trùm Redis call bên dưới
         Session session = sessionRepository.findByIdAndActiveTrue(sid)
                 .orElseThrow(() -> new SessionException(SessionErrorCode.SESSION_NOT_FOUND));
 
-        // Validate Ownership
         if (!session.getUserId().equals(uid)) {
             log.warn("User {} attempted to access session {} owned by {}", userId, sessionId, session.getUserId());
             throw new SessionException(SessionErrorCode.SESSION_ACCESS_DENIED);
         }
 
-        // Warm-up cache để lần sau không cần xuống DB nữa
+        // Cache NGOÀI transaction — Redis call không giữ DB connection
         sessionCacheService.cacheSessionId(sessionId);
         return sessionId;
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * KHÔNG dùng @Transactional — phần lớn case trả về từ Redis cache, KHÔNG cần DB connection.
+     * Chỉ khi cache miss thì mới query DB.
+     * findRecentMessagesBySessionId() tự có @Transactional(readOnly=true) từ Spring Data JPA.
+     */
     public List<Message> prepareHistory(String sessionId, boolean isNewSession) {
+        // ── Case 1: Session mới → không cần history, KHÔNG acquire connection ──
         if (isNewSession) {
             return Collections.emptyList();
         }
 
+        // ── Case 2: Redis cache hit → trả về ngay, KHÔNG acquire connection ──
         if (redisStreamService.hasHistory(sessionId)) {
             List<MessageDTO> cachedHistory = redisStreamService.getHistory(sessionId);
             log.info("Using cached history from Redis: {} messages", cachedHistory.size());
             return convertToSpringMessages(cachedHistory);
         }
 
+        // ── Case 3: Cache miss → query DB (connection chỉ giữ đúng lúc SELECT ~2ms) ──
         List<MessageDTO> dbHistory = messageRepository
                 .findRecentMessagesBySessionId(UUID.fromString(sessionId), PageRequest.of(0, 20))
                 .stream()
@@ -188,6 +205,7 @@ public class ChatSessionService {
                 .sorted(Comparator.comparing(MessageDTO::getCreatedAt))
                 .toList();
 
+        // Cache kết quả vào Redis — Redis call NGOÀI scope DB
         if (!dbHistory.isEmpty()) {
             redisStreamService.cacheHistory(sessionId, dbHistory);
             log.info("Loaded and cached {} messages from DB", dbHistory.size());

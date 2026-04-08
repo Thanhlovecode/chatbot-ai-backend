@@ -7,6 +7,7 @@ import org.springframework.ai.vectorstore.qdrant.QdrantVectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
@@ -24,6 +25,7 @@ import org.springframework.context.annotation.Primary;
  * Bộ embedding model khác nhau đảm bảo đúng task type theo khuyến nghị của Gemini.
  */
 @Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
 public class VectorStoreConfig {
 
     @Value("${spring.ai.vectorstore.qdrant.collection-name:spring}")

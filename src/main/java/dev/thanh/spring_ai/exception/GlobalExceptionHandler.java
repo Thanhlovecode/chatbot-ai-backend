@@ -3,6 +3,7 @@ package dev.thanh.spring_ai.exception;
 import dev.thanh.spring_ai.dto.response.ResponseData;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.catalina.connector.ClientAbortException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,7 +11,9 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
+import java.io.IOException;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -18,6 +21,34 @@ import java.util.Map;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    /**
+     * Bỏ qua lỗi khi Client (Browser/k6) chủ động ngắt kết nối lúc đang Streaming SSE.
+     * Ngăn chặn bão Log (Log Storm) làm kẹt CPU.
+     */
+    @ExceptionHandler({
+        AsyncRequestNotUsableException.class,
+        ClientAbortException.class
+    })
+    public void handleClientAbortException(Exception ex) {
+        // KHÔNG in ra stack trace (không truyền 'ex' vào log.warn).
+        // Chỉ in 1 dòng WARN ngắn gọn. Nếu test 5000 VU, bạn có thể comment luôn dòng này để tắt hẳn log.
+        log.warn("Client abruptly disconnected mid-stream (Connection reset). Ignoring.");
+    }
+
+    /**
+     * Bắt thêm IOException thuần túy để chặn các log rác về Network Pipe
+     */
+    @ExceptionHandler(IOException.class)
+    public void handleIoException(IOException ex) {
+        String msg = ex.getMessage();
+        if (msg != null && (msg.contains("Connection reset by peer") || msg.contains("Broken pipe"))) {
+            log.warn("Network pipe broken (Client disconnected).");
+        } else {
+            // Các lỗi IO nghiêm trọng khác (như hỏng ổ cứng, file) thì mới log error
+            log.error("Unexpected IO Error: ", ex);
+        }
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ResponseData<Map<String, String>>> handleValidationExceptions(
