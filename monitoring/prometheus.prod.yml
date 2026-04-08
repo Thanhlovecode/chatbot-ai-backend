@@ -1,0 +1,42 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  prometheus.prod.yml — Scrape Config cho môi trường PRODUCTION   ║
+# ║                                                                  ║
+# ║  Targets trỏ vào container names qua Docker internal network     ║
+# ║  → Tất cả services chạy trong Docker containers                  ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # ── Spring Boot Application (Docker container) ─────────────────────
+  # Metrics: JVM, HikariCP, HTTP requests, Resilience4j, custom chat_*
+  - job_name: 'spring-ai'
+    metrics_path: '/actuator/prometheus'
+    scrape_interval: 3s
+    static_configs:
+      - targets: ['spring-ai:8080']                  # ← Container name!
+        labels:
+          app: 'spring-ai'
+          environment: 'production'
+
+  # ── Redis Exporter ──────────────────────────────────────────────────
+  # Metrics: redis_connected_clients, redis_memory_used_bytes, redis_commands_*
+  - job_name: 'redis'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          app: 'redis'
+          environment: 'production'
+
+  # ── PostgreSQL Exporter ─────────────────────────────────────────────
+  # Metrics: pg_stat_activity, pg_stat_database, pg_locks, pg_stat_bgwriter
+  - job_name: 'postgres'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          app: 'postgres'
+          environment: 'production'

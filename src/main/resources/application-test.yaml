@@ -1,0 +1,140 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║       application-test.yaml — LOAD TESTING PROFILE              ║
+# ║  Active: SPRING_PROFILES_ACTIVE=test                            ║
+# ║                                                                  ║
+# ║  Mục tiêu:                                                       ║
+# ║  - Dùng MockLlmService thay vì Gemini Chat API thật             ║
+# ║  - Dùng MockRagService thay vì Embedding+Qdrant+Rerank thật    ║
+# ║  - Tắt rate limit per-user → cho phép flood requests            ║
+# ║  - Pool sizes giống production để đo đúng bottleneck            ║
+# ║  - Logging tối giản để không ảnh hưởng throughput               ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+spring:
+  # ── PostgreSQL — giống prod pool size ──────────────────────────────
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/chatbot_loadtest?rewriteBatchedInserts=true&stringtype=unspecified
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: ChatBotPool-Test
+      maximum-pool-size: 20           # (cores×2)+1 ≈ 17–20, giữ đúng công thức
+      minimum-idle: 10              # Eager-init TẤT CẢ connection sẵn — tránh lazy-create khi burst
+      connection-timeout: 10000       # 10s — đủ buffer cho burst 3000 VU sau khi tối ưu @Transactional
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      keepalive-time: 60000
+      auto-commit: false
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 250
+        prepStmtCacheSqlLimit: 2048
+        useServerPrepStmts: true
+        reWriteBatchedInserts: true
+        prepareThreshold: 1
+        defaultRowFetchSize: 50      # Chatbot queries chỉ cần 1-20 rows, 500 gây lãng phí JVM buffer
+
+  # ── Redis — giống prod pool size ───────────────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 3000
+      timeout: 2000
+      repositories:
+        enabled: false
+      lettuce:
+        pool:
+          enabled: true           # CRITICAL: phải true để kích hoạt pooling, tránh BindException
+          max-active: 50          # Test: dùng 50 như prod để đo đúng bottleneck thực tế
+          max-idle: 20
+          min-idle: 5
+          max-wait: 2000ms        # 2s — nhất quán với prod
+          time-between-eviction-runs: 60000
+          test-on-borrow: true
+          test-while-idle: true
+          min-evictable-idle-time: 60000
+        shutdown-timeout: 5000
+
+  # ── JPA / Hibernate — tối ưu query plan caching ─────────────────
+  jpa:
+    properties:
+      hibernate:
+        query:
+          in_clause_parameter_padding: true   # Làm tròn IN clause → PostgreSQL reuse cached plan
+
+  # ── Tắt Qdrant + AI auto-configuration (đã mock) ─────────────────
+  ai:
+    google:
+      genai:
+        api-key: "mock-not-used"             # Override ${GEMINI_API_KEY} — không cần env var
+        embedding:
+          api-key: "mock-not-used"
+    vectorstore:
+      qdrant:
+        enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.vectorstore.qdrant.autoconfigure.QdrantVectorStoreAutoConfiguration
+      - org.springframework.ai.model.google.genai.autoconfigure.chat.GoogleGenAiChatAutoConfiguration
+      - org.springframework.ai.model.google.genai.autoconfigure.embedding.GoogleGenAiEmbeddingConnectionAutoConfiguration
+      - org.springframework.ai.model.google.genai.autoconfigure.embedding.GoogleGenAiTextEmbeddingAutoConfiguration
+
+# ── Override Cohere API key — không cần env var khi mock ──────────
+cohere:
+  api-key: "mock-not-used"
+
+# ── Mock LLM — giả lập Gemini API ──────────────────────────────────
+llm:
+  mock:
+    enabled: true
+    min-delay-ms: 300                # Minimum TTFB (Time To First Byte)
+    max-delay-ms: 2000               # Maximum TTFB
+    tokens-per-response: 40          # ~40 token mỗi response
+    token-interval-ms: 30            # 30ms giữa mỗi token (realistic streaming)
+    failure-rate: 0.02               # 2% request giả lập failure
+
+# ── Mock RAG — giả lập Embedding + Qdrant + Cohere Rerank ──────────
+rag:
+  mock:
+    enabled: true
+    min-delay-ms: 100                # Minimum latency (Embedding+Search+Rerank)
+    max-delay-ms: 500                # Maximum latency
+    failure-rate: 0.01               # 1% giả lập failure (RAG ít lỗi hơn LLM)
+
+# ── Tắt rate limit per-user để flood requests ──────────────────────
+rate-limit:
+  bucket-capacity: 999999
+  refill-rate-per-second: 999999
+  daily-token-limit: 999999999
+
+# ── Server — giống prod ─────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8080}
+
+# ── CORS — cho phép mọi origin khi load test ────────────────────────
+cors:
+  allowed-origins: http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:3000
+
+app:
+  cookie:
+    secure: false
+
+# ── Logging — tối giản để không bottleneck I/O ──────────────────────
+logging:
+  level:
+    root: WARN
+    dev.thanh.spring_ai: INFO
+    dev.thanh.spring_ai.test: INFO   # Xem Mock LLM + Mock RAG logs
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+    org.springframework.ai: WARN
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    com.zaxxer.hikari: WARN
+    io.lettuce.core: WARN
+    io.lettuce.core.protocol: WARN

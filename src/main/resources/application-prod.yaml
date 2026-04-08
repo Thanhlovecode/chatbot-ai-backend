@@ -17,7 +17,7 @@ spring:
       pool-name: ChatBotPool-Prod
       maximum-pool-size: 20           # Tối đa 20 connections tới DB
       minimum-idle: 10               # Pre-warm 10 connections
-      connection-timeout: 3000
+      connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
       keepalive-time: 60000
@@ -31,7 +31,7 @@ spring:
         useServerPrepStmts: true
         reWriteBatchedInserts: true   # CRITICAL: PostgreSQL batch optimization
         prepareThreshold: 1
-        defaultRowFetchSize: 500
+        defaultRowFetchSize: 50      # Chatbot queries chỉ cần 1-20 rows, 500 gây lãng phí JVM buffer
 
   # ── Flyway — KHÔNG baseline-on-migrate trên prod ─────────────────
   flyway:
@@ -43,6 +43,8 @@ spring:
     show-sql: false
     properties:
       hibernate:
+        query:
+          in_clause_parameter_padding: true   # Làm tròn IN clause → PostgreSQL reuse cached plan
         session:
           events:
             log:
@@ -60,10 +62,11 @@ spring:
         enabled: false
       lettuce:
         pool:
-          max-active: 20
-          max-idle: 10
+          enabled: true           # CRITICAL: phải true để kích hoạt pooling, tránh BindException
+          max-active: 50          # Tối đa 50 connections — đủ cho load cao, v—n dưới ephemeral port limit
+          max-idle: 20
           min-idle: 5
-          max-wait: 1000ms
+          max-wait: 2000ms        # Tăng lên 2s trên prod (timeout chờ pool tự pool under pressure)
           time-between-eviction-runs: 60000
           test-on-borrow: true
           test-while-idle: true

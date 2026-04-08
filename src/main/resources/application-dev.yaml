@@ -50,6 +50,7 @@ spring:
         enabled: false
       lettuce:
         pool:
+          enabled: true           # CRITICAL: phải true để kích hoạt pooling, tránh BindException
           max-active: 10
           max-idle: 5
           min-idle: 2
