@@ -22,7 +22,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -30,112 +29,113 @@ import static org.mockito.Mockito.when;
 @DisplayName("RateLimitService — Unit Tests")
 class RateLimitServiceTest {
 
-    @Mock
-    private StringRedisTemplate redisTemplate;
+        @Mock
+        private StringRedisTemplate redisTemplate;
 
-    @Mock
-    private RateLimitProperties props;
+        @Mock
+        private RateLimitProperties props;
 
-    @InjectMocks
-    private RateLimitService rateLimitService;
+        @InjectMocks
+        private RateLimitService rateLimitService;
 
-    private static final String USER_ID = "user-abc-123";
+        private static final String USER_ID = "user-abc-123";
 
-    @BeforeEach
-    void setUp() {
-        when(props.getBucketCapacity()).thenReturn(10);
-        when(props.getRefillRatePerSecond()).thenReturn(1);
-        when(props.getDailyTokenLimit()).thenReturn(10000L);
-    }
+        @BeforeEach
+        void setUp() {
+                when(props.getBucketCapacity()).thenReturn(10);
+                when(props.getRefillRatePerSecond()).thenReturn(1);
+                when(props.getDailyTokenLimit()).thenReturn(10000L);
+        }
 
-    // ─────────────────────────────────────────────────────────
-    // Layer 1: Token Bucket
-    // ─────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────
+        // Layer 1: Token Bucket
+        // ─────────────────────────────────────────────────────────
 
-    @Test
-    @DisplayName("checkTokenBucket — when allowed — should not throw")
-    void checkTokenBucket_WhenAllowed_ShouldNotThrow() {
-        // Given: Redis returns [1 (allowed), 5 (tokensLeft), 0 (retryAfterSec)]
-        when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                .thenReturn(List.of(1L, 5L, 0L));
+        @Test
+        @DisplayName("checkTokenBucket — when allowed — should not throw")
+        void checkTokenBucket_WhenAllowed_ShouldNotThrow() {
+                // Given: Redis returns [1 (allowed), 5 (tokensLeft), 0 (retryAfterSec)]
+                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
+                                .thenReturn(List.of(1L, 5L, 0L));
 
-        // When / Then
-        assertThatCode(() -> rateLimitService.checkTokenBucket(USER_ID))
-                .doesNotThrowAnyException();
-    }
+                // When / Then
+                assertThatCode(() -> rateLimitService.checkTokenBucket(USER_ID))
+                                .doesNotThrowAnyException();
+        }
 
-    @Test
-    @DisplayName("checkTokenBucket — when blocked — should throw RateLimitException with TOO_MANY_REQUESTS")
-    void checkTokenBucket_WhenBlocked_ShouldThrowRateLimitException() {
-        // Given: Redis returns [0 (blocked), 0 (tokensLeft), 10 (retry after 10s)]
-        when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                .thenReturn(List.of(0L, 0L, 10L));
+        @Test
+        @DisplayName("checkTokenBucket — when blocked — should throw RateLimitException with TOO_MANY_REQUESTS")
+        void checkTokenBucket_WhenBlocked_ShouldThrowRateLimitException() {
+                // Given: Redis returns [0 (blocked), 0 (tokensLeft), 10 (retry after 10s)]
+                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
+                                .thenReturn(List.of(0L, 0L, 10L));
 
-        // When / Then
-        assertThatThrownBy(() -> rateLimitService.checkTokenBucket(USER_ID))
-                .isInstanceOf(RateLimitException.class)
-                .satisfies(ex -> {
-                    RateLimitException rle = (RateLimitException) ex;
-                    assertThat(rle.getErrorCode()).isEqualTo(RateLimitErrorCode.TOO_MANY_REQUESTS);
-                    assertThat(rle.getRetryAfterSeconds()).isEqualTo(10L);
-                });
-    }
+                // When / Then
+                assertThatThrownBy(() -> rateLimitService.checkTokenBucket(USER_ID))
+                                .isInstanceOf(RateLimitException.class)
+                                .satisfies(ex -> {
+                                        RateLimitException rle = (RateLimitException) ex;
+                                        assertThat(rle.getErrorCode()).isEqualTo(RateLimitErrorCode.TOO_MANY_REQUESTS);
+                                        assertThat(rle.getRetryAfterSeconds()).isEqualTo(10L);
+                                });
+        }
 
-    @Test
-    @DisplayName("checkTokenBucket — when Redis returns null — should fail-open (no exception)")
-    void checkTokenBucket_WhenRedisReturnsNull_ShouldFailOpen() {
-        // Given: Redis returns null (e.g. connection issue)
-        when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                .thenReturn(null);
+        @Test
+        @DisplayName("checkTokenBucket — when Redis returns null — should fail-open (no exception)")
+        void checkTokenBucket_WhenRedisReturnsNull_ShouldFailOpen() {
+                // Given: Redis returns null (e.g. connection issue)
+                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
+                                .thenReturn(null);
 
-        // When / Then — fail-open: no exception thrown
-        assertThatCode(() -> rateLimitService.checkTokenBucket(USER_ID))
-                .doesNotThrowAnyException();
-    }
+                // When / Then — fail-open: no exception thrown
+                assertThatCode(() -> rateLimitService.checkTokenBucket(USER_ID))
+                                .doesNotThrowAnyException();
+        }
 
-    // ─────────────────────────────────────────────────────────
-    // Layer 2: Daily Token Quota
-    // ─────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────
+        // Layer 2: Daily Token Quota
+        // ─────────────────────────────────────────────────────────
 
-    @Test
-    @DisplayName("checkDailyTokenQuota — when within limit — should not throw")
-    void checkDailyTokenQuota_WhenWithinLimit_ShouldNotThrow() {
-        // Given: Redis returns [1 (allowed), 100 (used), 10000 (limit)]
-        when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                .thenReturn(List.of(1L, 100L, 10000L));
+        @Test
+        @DisplayName("checkDailyTokenQuota — when within limit — should not throw")
+        void checkDailyTokenQuota_WhenWithinLimit_ShouldNotThrow() {
+                // Given: Redis returns [1 (allowed), 100 (used), 10000 (limit)]
+                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
+                                .thenReturn(List.of(1L, 100L, 10000L));
 
-        // When / Then
-        assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 500))
-                .doesNotThrowAnyException();
-    }
+                // When / Then
+                assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 500))
+                                .doesNotThrowAnyException();
+        }
 
-    @Test
-    @DisplayName("checkDailyTokenQuota — when exceeded — should throw RateLimitException with DAILY_TOKEN_LIMIT_EXCEEDED")
-    void checkDailyTokenQuota_WhenExceeded_ShouldThrowRateLimitException() {
-        // Given: Redis returns [0 (blocked), 10000 (used), 10000 (limit)]
-        when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                .thenReturn(List.of(0L, 10000L, 10000L));
+        @Test
+        @DisplayName("checkDailyTokenQuota — when exceeded — should throw RateLimitException with DAILY_TOKEN_LIMIT_EXCEEDED")
+        void checkDailyTokenQuota_WhenExceeded_ShouldThrowRateLimitException() {
+                // Given: Redis returns [0 (blocked), 10000 (used), 10000 (limit)]
+                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
+                                .thenReturn(List.of(0L, 10000L, 10000L));
 
-        // When / Then
-        assertThatThrownBy(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
-                .isInstanceOf(RateLimitException.class)
-                .satisfies(ex -> {
-                    RateLimitException rle = (RateLimitException) ex;
-                    assertThat(rle.getErrorCode()).isEqualTo(RateLimitErrorCode.DAILY_TOKEN_LIMIT_EXCEEDED);
-                    assertThat(rle.getTokenUsed()).isEqualTo(10000L);
-                    assertThat(rle.getTokenLimit()).isEqualTo(10000L);
-                });
-    }
+                // When / Then
+                assertThatThrownBy(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
+                                .isInstanceOf(RateLimitException.class)
+                                .satisfies(ex -> {
+                                        RateLimitException rle = (RateLimitException) ex;
+                                        assertThat(rle.getErrorCode())
+                                                        .isEqualTo(RateLimitErrorCode.DAILY_TOKEN_LIMIT_EXCEEDED);
+                                        assertThat(rle.getTokenUsed()).isEqualTo(10000L);
+                                        assertThat(rle.getTokenLimit()).isEqualTo(10000L);
+                                });
+        }
 
-    @Test
-    @DisplayName("checkDailyTokenQuota — when Redis returns null — should fail-open (no exception)")
-    void checkDailyTokenQuota_WhenRedisReturnsNull_ShouldFailOpen() {
-        // Given: Redis returns null
-        when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                .thenReturn(null);
+        @Test
+        @DisplayName("checkDailyTokenQuota — when Redis returns null — should fail-open (no exception)")
+        void checkDailyTokenQuota_WhenRedisReturnsNull_ShouldFailOpen() {
+                // Given: Redis returns null
+                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
+                                .thenReturn(null);
 
-        // When / Then
-        assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
-                .doesNotThrowAnyException();
-    }
+                // When / Then
+                assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
+                                .doesNotThrowAnyException();
+        }
 }
