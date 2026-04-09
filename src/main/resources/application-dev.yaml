@@ -44,8 +44,9 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      connect-timeout: 3000
-      timeout: 2000
+      # ⚠️ connect-timeout, timeout, shutdown-timeout:
+      #    Quản lý tập trung tại RedisConfig.java (LettuceClientConfigurationBuilderCustomizer)
+      #    Không khai báo ở đây để tránh bị ghi đè âm thầm.
       repositories:
         enabled: false
       lettuce:
@@ -59,7 +60,7 @@ spring:
           test-on-borrow: true
           test-while-idle: true
           min-evictable-idle-time: 60000
-        shutdown-timeout: 5000
+
 
   # ── Qdrant — local ───────────────────────────────────────────────
   ai:

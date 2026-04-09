@@ -1,5 +1,7 @@
 package dev.thanh.spring_ai.service;
 
+import io.micrometer.core.instrument.Timer;
+
 
 
 import dev.thanh.spring_ai.config.RedisStreamProperties;
@@ -7,6 +9,7 @@ import dev.thanh.spring_ai.dto.request.MessageDTO;
 import dev.thanh.spring_ai.dto.request.StreamMessageMetadata;
 import dev.thanh.spring_ai.entity.ChatMessage;
 import dev.thanh.spring_ai.repository.BatchMessageRepository;
+import dev.thanh.spring_ai.utils.SafeRedisExecutor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
@@ -24,13 +27,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class RedisStreamService {
-
 
     private static final int LIMIT_SIZE = 20;
     private static final String HISTORY_PREFIX = "chat:history:";
@@ -40,91 +43,126 @@ public class RedisStreamService {
     private final MessageProcessorService messageProcessor;
     private final DeadLetterQueueService dlqService;
     private final BatchMessageRepository batchRepository;
+    private final SafeRedisExecutor safeRedis;
+    private final ChatMetricsService chatMetrics;
 
 
+    /**
+     * Push message to Redis Stream — protected by CircuitBreaker.
+     * Nếu CB OPEN hoặc Redis fail → fallback direct insert vào PostgreSQL.
+     */
     public void pushToStream(MessageDTO messageInfo) {
-        Map<String, String> messageData = new HashMap<>();
-        messageData.put("type", messageInfo.getRole().name());
-        messageData.put("id", messageInfo.getId().toString());
-        messageData.put("sessionId", messageInfo.getSessionId());
-        messageData.put("content", messageInfo.getContent());
-        messageData.put("createdAt", messageInfo.getCreatedAt().toString());
+        safeRedis.tryExecuteOrElse(
+                () -> {
+                    Map<String, String> messageData = new HashMap<>();
+                    messageData.put("type", messageInfo.getRole().name());
+                    messageData.put("id", messageInfo.getId().toString());
+                    messageData.put("sessionId", messageInfo.getSessionId());
+                    messageData.put("content", messageInfo.getContent());
+                    messageData.put("createdAt", messageInfo.getCreatedAt().toString());
 
-        StringRecord record = StreamRecords.string(messageData).withStreamKey(streamProperties.getName());
-        RecordId recordId = redisTemplate.opsForStream().add(record);
+                    StringRecord record = StreamRecords.string(messageData)
+                            .withStreamKey(streamProperties.getName());
+                    RecordId recordId = redisTemplate.opsForStream().add(record);
 
-        log.info("Pushed to stream: type={}, sessionId={}, recordId={}", messageInfo.getRole().name(),messageInfo.getSessionId(), recordId);
+                    log.info("Pushed to stream: type={}, sessionId={}, recordId={}",
+                            messageInfo.getRole().name(), messageInfo.getSessionId(), recordId);
+                },
+                () -> directDbFallback(messageInfo),
+                "pushToStream"
+        );
     }
 
+    /**
+     * Get chat history from Redis cache — protected by CircuitBreaker.
+     * Nếu CB OPEN → return empty list → ChatSessionService sẽ fallback sang DB.
+     */
     public List<MessageDTO> getHistory(String sessionId) {
         String key = HISTORY_PREFIX + sessionId;
-        try {
-            List<Object> rawHistory = redisTemplate.opsForList().range(key, 0, -1);
+        return safeRedis.executeWithFallback(
+                () -> {
+                    List<Object> rawHistory = redisTemplate.opsForList().range(key, 0, -1);
 
-            if (rawHistory == null || rawHistory.isEmpty()) {
-                log.info("No history found for session {}", sessionId);
-                return List.of();
-            }
+                    if (rawHistory == null || rawHistory.isEmpty()) {
+                        log.info("No history found for session {}", sessionId);
+                        return List.<MessageDTO>of();
+                    }
 
-            List<MessageDTO> history = rawHistory.stream()
-                    .map(obj -> (MessageDTO) obj)
-                    .toList();
+                    List<MessageDTO> history = rawHistory.stream()
+                            .map(obj -> (MessageDTO) obj)
+                            .toList();
 
-            log.info("Retrieved history for session {}: {} messages", sessionId, history.size());
-            return history;
-        } catch (Exception e) {
-            log.error("Failed to load history for session {} from Redis: {}. Clearing corrupted cache.", sessionId, e.getMessage());
-            redisTemplate.delete(key);
-            return List.of();
-        }
+                    log.info("Retrieved history for session {}: {} messages", sessionId, history.size());
+                    return history;
+                },
+                List::of,
+                "getHistory"
+        );
     }
 
 
 
     public void trimStream(long maxLength) {
-        redisTemplate.opsForStream().trim(streamProperties.getName(), maxLength, true);
-        log.info("Trimmed stream to max {} messages", maxLength);
+        safeRedis.tryExecute(
+                () -> {
+                    redisTemplate.opsForStream().trim(streamProperties.getName(), maxLength, true);
+                    log.info("Trimmed stream to max {} messages", maxLength);
+                },
+                "trimStream"
+        );
     }
 
     public boolean hasHistory(String sessionId) {
         String key = HISTORY_PREFIX + sessionId;
-        Long size = redisTemplate.opsForList().size(key);
-        return size != null && size > 0;
+        return safeRedis.executeWithFallback(
+                () -> {
+                    Long size = redisTemplate.opsForList().size(key);
+                    return size != null && size > 0;
+                },
+                () -> false,
+                "hasHistory"
+        );
     }
 
+    /**
+     * Pipeline update for history cache — protected by CircuitBreaker.
+     * Nếu CB OPEN → skip cache update, messages đã an toàn trong Redis Stream hoặc DB.
+     */
     public void updateHistoryCachePipeline(MessageDTO userMessage, MessageDTO assistantMessage) {
-        try {
-            redisTemplate.executePipelined(new SessionCallback<Object>() {
-                @Override
-                public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
-                    @SuppressWarnings("unchecked")
-                    RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
-                    String sessionKey = HISTORY_PREFIX + userMessage.getSessionId();
+        safeRedis.tryExecute(
+                () -> redisTemplate.executePipelined(new SessionCallback<Object>() {
+                    @Override
+                    public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                        @SuppressWarnings("unchecked")
+                        RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
+                        String sessionKey = HISTORY_PREFIX + userMessage.getSessionId();
 
-                    ops.opsForList().rightPush(sessionKey, userMessage);
-                    ops.opsForList().rightPush(sessionKey, assistantMessage);
-                    ops.opsForList().trim(sessionKey, -LIMIT_SIZE, -1);
-                    ops.expire(sessionKey, Duration.ofHours(24));
+                        ops.opsForList().rightPush(sessionKey, userMessage);
+                        ops.opsForList().rightPush(sessionKey, assistantMessage);
+                        ops.opsForList().trim(sessionKey, -LIMIT_SIZE, -1);
+                        ops.expire(sessionKey, Duration.ofHours(24));
 
-                    return null;
-                }
-            });
-
-        } catch (Exception e) {
-            log.warn("⚠️ Cache update failed for session {} - messages are in stream",
-                    userMessage.getSessionId(), e);
-        }
+                        return null;
+                    }
+                }),
+                "updateHistoryCache"
+        );
     }
 
     public void cacheHistory(String sessionId, List<MessageDTO> messages) {
-        String key = HISTORY_PREFIX + sessionId;
-
-        if (messages != null && !messages.isEmpty()) {
-            // Push tất cả MessageDTO vào List
-            redisTemplate.opsForList().rightPushAll(key, messages.toArray());
-            redisTemplate.expire(key, Duration.ofHours(24));
-            log.info("Cached {} messages for session {}", messages.size(), sessionId);
+        if (messages == null || messages.isEmpty()) {
+            return;
         }
+
+        String key = HISTORY_PREFIX + sessionId;
+        safeRedis.tryExecute(
+                () -> {
+                    redisTemplate.opsForList().rightPushAll(key, messages.toArray());
+                    redisTemplate.expire(key, Duration.ofHours(24));
+                    log.info("Cached {} messages for session {}", messages.size(), sessionId);
+                },
+                "cacheHistory"
+        );
     }
 
     /**
@@ -133,13 +171,25 @@ public class RedisStreamService {
      */
     public void clearHistory(String sessionId) {
         String key = HISTORY_PREFIX + sessionId;
-        Boolean deleted = redisTemplate.delete(key);
-        if (Boolean.TRUE.equals(deleted)) {
-            log.info("Cleared history cache for session {}", sessionId);
-        }
+        safeRedis.tryExecute(
+                () -> {
+                    Boolean deleted = redisTemplate.delete(key);
+                    if (Boolean.TRUE.equals(deleted)) {
+                        log.info("Cleared history cache for session {}", sessionId);
+                    }
+                },
+                "clearHistory"
+        );
     }
 
 
+    /**
+     * Consume new messages from Redis Stream — NOT protected by CircuitBreaker.
+     *
+     * Tại sao? Stream consumer chạy trong scheduler loop riêng biệt.
+     * Nếu Redis die, read sẽ throw → scheduler catch → retry next cycle.
+     * CB cho consumer sẽ gây vấn đề: CB OPEN → không đọc → messages tích tụ.
+     */
     @SuppressWarnings("unchecked")
     public int consumeNewMessages(int consumerIndex) {
         String consumerName = streamProperties.getConsumerName() + "-" + consumerIndex;
@@ -178,14 +228,19 @@ public class RedisStreamService {
                 return 0;
             }
 
-            // Phase 2: Batch insert to PostgreSQL
+            // Phase 2: Batch insert to PostgreSQL — đo thời gian insert
+            Timer.Sample batchTimer = chatMetrics.startBatchInsertTimer();
             int insertedCount = batchRepository.batchInsert(messages);
+            chatMetrics.stopBatchInsertTimer(batchTimer);
 
             List<String> messageIds = records.stream()
                     .map(record -> record.getId().getValue())
                     .collect(Collectors.toList());
 
             acknowledgeMessages(messageIds);
+
+            // Cập nhật pending messages gauge (giảm sau khi xử lý xong)
+            updatePendingMessagesGauge();
 
             log.info("Successfully processed batch: {} messages", insertedCount);
             return insertedCount;
@@ -267,4 +322,54 @@ public class RedisStreamService {
         return null;
     }
 
+    /**
+     * Direct DB insert fallback khi Redis Stream không khả dụng.
+     * Convert MessageDTO → ChatMessage entity và insert trực tiếp vào PostgreSQL.
+     * <p>
+     * ON CONFLICT (message_id) DO NOTHING đảm bảo idempotent nếu message
+     * trùng với data đã persist qua path khác.
+     */
+    private void directDbFallback(MessageDTO messageInfo) {
+        try {
+            ChatMessage chatMessage = ChatMessage.builder()
+                    .id(UUID.fromString(messageInfo.getId()))
+                    .messageId(messageInfo.getId())
+                    .sessionId(UUID.fromString(messageInfo.getSessionId()))
+                    .role(messageInfo.getRole())
+                    .content(messageInfo.getContent())
+                    .createdAt(messageInfo.getCreatedAt())
+                    .build();
+
+            batchRepository.singleInsert(chatMessage);
+            log.info("Direct DB fallback: persisted message for session {} (Redis unavailable)",
+                    messageInfo.getSessionId());
+        } catch (Exception dbError) {
+            log.error("CRITICAL: Both Redis AND DB insert failed for message {}. DATA LOSS!",
+                    messageInfo.getId(), dbError);
+        }
+    }
+
+    /**
+     * Get CircuitBreaker state — exposed for health monitoring via Actuator.
+     */
+    public SafeRedisExecutor getSafeRedis() {
+        return safeRedis;
+    }
+
+    /**
+     * Cập nhật gauge pending messages từ Redis Stream.
+     * Gọi sau mỗi lần consume batch để Prometheus có giá trị realtime.
+     */
+    private void updatePendingMessagesGauge() {
+        try {
+            PendingMessagesSummary summary = redisTemplate.opsForStream().pending(
+                    streamProperties.getName(),
+                    streamProperties.getConsumerGroup());
+            if (summary != null) {
+                chatMetrics.getPendingMessages().set((int) summary.getTotalPendingMessages());
+            }
+        } catch (Exception e) {
+            log.debug("Failed to update pending messages gauge: {}", e.getMessage());
+        }
+    }
 }

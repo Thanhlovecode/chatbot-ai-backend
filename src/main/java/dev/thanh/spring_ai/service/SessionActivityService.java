@@ -1,5 +1,6 @@
 package dev.thanh.spring_ai.service;
 
+import dev.thanh.spring_ai.utils.SafeRedisExecutor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
@@ -26,6 +27,10 @@ import java.util.stream.Collectors;
  * </ul>
  *
  * Score = epoch millis (timestamp activity mới nhất).
+ *
+ * Tất cả Redis operations đều được bảo vệ bởi {@link SafeRedisExecutor}.
+ * Khi CB OPEN → fail-fast, return safe defaults (empty list, 0, etc.)
+ * → ChatSessionService fallback sang DB queries.
  */
 @Slf4j(topic = "SESSION-ACTIVITY")
 @Service
@@ -39,9 +44,11 @@ public class SessionActivityService {
     private static final int MAX_ZSET_SIZE = 50;
 
     private final RedisTemplate<String, Object> redisTemplate;
+    private final SafeRedisExecutor safeRedis;
 
     @Value("${session.sync.user-sessions-ttl-hours:24}")
     private int userSessionsTtlHours;
+
 
     /**
      * Gọi khi user chat trên session (mới hoặc cũ).
@@ -51,29 +58,29 @@ public class SessionActivityService {
         double score = (double) System.currentTimeMillis();
         String userKey = buildUserKey(userId);
 
-        try {
-            redisTemplate.executePipelined(new SessionCallback<Object>() {
-                @Override
-                @SuppressWarnings("unchecked")
-                public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
-                    RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
+        safeRedis.tryExecute(
+                () -> {
+                    redisTemplate.executePipelined(new SessionCallback<Object>() {
+                        @Override
+                        @SuppressWarnings("unchecked")
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                            RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
 
-                    // ZSET 1: User Sessions — score = timestamp hiện tại
-                    ops.opsForZSet().add(userKey, sessionId, score);
-                    ops.expire(userKey, Duration.ofHours(userSessionsTtlHours));
+                            // ZSET 1: User Sessions — score = timestamp hiện tại
+                            ops.opsForZSet().add(userKey, sessionId, score);
+                            ops.expire(userKey, Duration.ofHours(userSessionsTtlHours));
 
-                    // ZSET 2: Global Dirty — scheduler sẽ pop và sync xuống DB
-                    ops.opsForZSet().add(DIRTY_SESSIONS_KEY, sessionId, score);
+                            // ZSET 2: Global Dirty — scheduler sẽ pop và sync xuống DB
+                            ops.opsForZSet().add(DIRTY_SESSIONS_KEY, sessionId, score);
 
-                    return null;
-                }
-            });
+                            return null;
+                        }
+                    });
 
-            log.debug("Touched session activity: userId={}, sessionId={}", userId, sessionId);
-        } catch (Exception e) {
-            log.warn("Failed to touch session activity for session {} — non-critical, DB will have stale updatedAt",
-                    sessionId, e);
-        }
+                    log.debug("Touched session activity: userId={}, sessionId={}", userId, sessionId);
+                },
+                "touchSession"
+        );
     }
 
     /**
@@ -87,33 +94,36 @@ public class SessionActivityService {
         }
 
         String userKey = buildUserKey(userId);
-        Map<String, LocalDateTime> result = new HashMap<>();
 
-        try {
-            // Pipeline: ZSCORE cho mỗi sessionId trong 1 round-trip
-            List<Object> scores = redisTemplate.executePipelined(new SessionCallback<Object>() {
-                @Override
-                @SuppressWarnings("unchecked")
-                public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
-                    RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
-                    for (String sessionId : sessionIds) {
-                        ops.opsForZSet().score(userKey, sessionId);
+        return safeRedis.executeWithFallback(
+                () -> {
+                    Map<String, LocalDateTime> result = new HashMap<>();
+
+                    // Pipeline: ZSCORE cho mỗi sessionId trong 1 round-trip
+                    List<Object> scores = redisTemplate.executePipelined(new SessionCallback<Object>() {
+                        @Override
+                        @SuppressWarnings("unchecked")
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                            RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
+                            for (String sessionId : sessionIds) {
+                                ops.opsForZSet().score(userKey, sessionId);
+                            }
+                            return null;
+                        }
+                    });
+
+                    for (int i = 0; i < sessionIds.size(); i++) {
+                        Object score = scores.get(i);
+                        if (score instanceof Double doubleScore) {
+                            result.put(sessionIds.get(i), millisToLocalDateTime(doubleScore.longValue()));
+                        }
                     }
-                    return null;
-                }
-            });
 
-            for (int i = 0; i < sessionIds.size(); i++) {
-                Object score = scores.get(i);
-                if (score instanceof Double doubleScore) {
-                    result.put(sessionIds.get(i), millisToLocalDateTime(doubleScore.longValue()));
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Failed to get session timestamps from Redis — returning empty map", e);
-        }
-
-        return result;
+                    return result;
+                },
+                Collections::emptyMap,
+                "getSessionTimestamps"
+        );
     }
 
     /**
@@ -123,12 +133,11 @@ public class SessionActivityService {
      */
     public Long getZSetSize(String userId) {
         String userKey = buildUserKey(userId);
-        try {
-            return redisTemplate.opsForZSet().zCard(userKey);
-        } catch (Exception e) {
-            log.warn("Failed to get ZSET size for user {} — returning 0", userId, e);
-            return 0L;
-        }
+        return safeRedis.executeWithFallback(
+                () -> redisTemplate.opsForZSet().zCard(userKey),
+                () -> 0L,
+                "getZSetSize"
+        );
     }
 
     /**
@@ -145,13 +154,12 @@ public class SessionActivityService {
     public Set<ZSetOperations.TypedTuple<Object>> reverseRangeByScoreWithScores(
             String userId, double min, double max, long offset, long count) {
         String userKey = buildUserKey(userId);
-        try {
-            return redisTemplate.opsForZSet()
-                    .reverseRangeByScoreWithScores(userKey, min, max, offset, count);
-        } catch (Exception e) {
-            log.warn("Failed to get reverse range by score for user {} — returning empty set", userId, e);
-            return Collections.emptySet();
-        }
+        return safeRedis.executeWithFallback(
+                () -> redisTemplate.opsForZSet()
+                        .reverseRangeByScoreWithScores(userKey, min, max, offset, count),
+                Collections::emptySet,
+                "reverseRangeByScore"
+        );
     }
 
     /**
@@ -162,25 +170,29 @@ public class SessionActivityService {
     public List<String> getRecentSessionIds(String userId, int limit) {
         String userKey = buildUserKey(userId);
 
-        try {
-            Set<ZSetOperations.TypedTuple<Object>> tuples = redisTemplate.opsForZSet()
-                    .reverseRangeWithScores(userKey, 0, limit - 1);
+        return safeRedis.executeWithFallback(
+                () -> {
+                    Set<ZSetOperations.TypedTuple<Object>> tuples = redisTemplate.opsForZSet()
+                            .reverseRangeWithScores(userKey, 0, limit - 1);
 
-            if (tuples == null || tuples.isEmpty()) {
-                return Collections.emptyList();
-            }
+                    if (tuples == null || tuples.isEmpty()) {
+                        return Collections.<String>emptyList();
+                    }
 
-            return tuples.stream()
-                    .map(tuple -> (String) tuple.getValue())
-                    .collect(Collectors.toList());
-        } catch (Exception e) {
-            log.warn("Failed to get recent session IDs from Redis — returning empty list", e);
-            return Collections.emptyList();
-        }
+                    return tuples.stream()
+                            .map(tuple -> (String) tuple.getValue())
+                            .collect(Collectors.toList());
+                },
+                Collections::emptyList,
+                "getRecentSessionIds"
+        );
     }
 
     /**
      * ZPOPMIN batch từ ZSET 2 (Global Dirty) — scheduler gọi mỗi 10s.
+     *
+     * NOT protected by CB — scheduler must always attempt to drain dirty sessions.
+     * Nếu Redis die, scheduler catch exception → retry next cycle.
      *
      * @return Map&lt;sessionId, LocalDateTime&gt; — các sessions cần sync xuống DB.
      */
@@ -216,24 +228,25 @@ public class SessionActivityService {
     public void removeSession(String userId, String sessionId) {
         String userKey = buildUserKey(userId);
 
-        try {
-            redisTemplate.executePipelined(new SessionCallback<Object>() {
-                @Override
-                @SuppressWarnings("unchecked")
-                public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
-                    RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
+        safeRedis.tryExecute(
+                () -> {
+                    redisTemplate.executePipelined(new SessionCallback<Object>() {
+                        @Override
+                        @SuppressWarnings("unchecked")
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                            RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
 
-                    ops.opsForZSet().remove(userKey, sessionId);
-                    ops.opsForZSet().remove(DIRTY_SESSIONS_KEY, sessionId);
+                            ops.opsForZSet().remove(userKey, sessionId);
+                            ops.opsForZSet().remove(DIRTY_SESSIONS_KEY, sessionId);
 
-                    return null;
-                }
-            });
+                            return null;
+                        }
+                    });
 
-            log.info("Removed session {} from activity ZSETs for user {}", sessionId, userId);
-        } catch (Exception e) {
-            log.warn("Failed to remove session {} from activity ZSETs — non-critical", sessionId, e);
-        }
+                    log.info("Removed session {} from activity ZSETs for user {}", sessionId, userId);
+                },
+                "removeSession"
+        );
     }
 
     /**
@@ -250,29 +263,30 @@ public class SessionActivityService {
 
         String userKey = buildUserKey(userId);
 
-        try {
-            redisTemplate.executePipelined(new SessionCallback<Object>() {
-                @Override
-                @SuppressWarnings("unchecked")
-                public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
-                    RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
+        safeRedis.tryExecute(
+                () -> {
+                    redisTemplate.executePipelined(new SessionCallback<Object>() {
+                        @Override
+                        @SuppressWarnings("unchecked")
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                            RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
 
-                    for (Map.Entry<String, Double> entry : sessionScores.entrySet()) {
-                        ops.opsForZSet().add(userKey, entry.getKey(), entry.getValue());
-                    }
-                    // Trim về tối đa MAX_ZSET_SIZE: giữ top [newest], xóa oldest
-                    // ZREMRANGEBYRANK 0 -(N+1) → xóa từ rank thấp nhất đến thứ N+1 từ cuối
-                    ops.opsForZSet().removeRange(userKey, 0, -(MAX_ZSET_SIZE + 1));
-                    ops.expire(userKey, Duration.ofHours(userSessionsTtlHours));
+                            for (Map.Entry<String, Double> entry : sessionScores.entrySet()) {
+                                ops.opsForZSet().add(userKey, entry.getKey(), entry.getValue());
+                            }
+                            // Trim về tối đa MAX_ZSET_SIZE: giữ top [newest], xóa oldest
+                            // ZREMRANGEBYRANK 0 -(N+1) → xóa từ rank thấp nhất đến thứ N+1 từ cuối
+                            ops.opsForZSet().removeRange(userKey, 0, -(MAX_ZSET_SIZE + 1));
+                            ops.expire(userKey, Duration.ofHours(userSessionsTtlHours));
 
-                    return null;
-                }
-            });
+                            return null;
+                        }
+                    });
 
-            log.info("Warmed up Redis ZSET for user {} with {} sessions", userId, sessionScores.size());
-        } catch (Exception e) {
-            log.warn("Failed to warm up Redis ZSET for user {} — non-critical", userId, e);
-        }
+                    log.info("Warmed up Redis ZSET for user {} with {} sessions", userId, sessionScores.size());
+                },
+                "warmUpFromDb"
+        );
     }
 
     private String buildUserKey(String userId) {

@@ -40,12 +40,12 @@ public class CustomJwtDecoder implements JwtDecoder {
         }
 
         // 3. Check if user has an active session (whitelist)
-        // String userId = jwt.getClaimAsString(TokenConstants.CLAIM_USER_ID);
-        // String whitelistKey = TokenConstants.AT_WHITE_LIST + userId;
-        // Object whitelistValue = redisTemplate.opsForValue().get(whitelistKey);
-        // if (whitelistValue == null) {
-        // throw new SecurityAuthException(SecurityErrorCode.INVALID_TOKEN);
-        // }
+        String userId = jwt.getClaimAsString(TokenConstants.CLAIM_USER_ID);
+        String whitelistKey = TokenConstants.AT_WHITE_LIST + userId;
+        Object whitelistValue = redisTemplate.opsForValue().get(whitelistKey);
+        if (whitelistValue == null) {
+            throw new SecurityAuthException(SecurityErrorCode.INVALID_TOKEN);
+        }
 
         return jwt;
     }

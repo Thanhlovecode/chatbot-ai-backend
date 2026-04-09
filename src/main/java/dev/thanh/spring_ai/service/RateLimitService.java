@@ -3,6 +3,7 @@ package dev.thanh.spring_ai.service;
 import dev.thanh.spring_ai.config.RateLimitProperties;
 import dev.thanh.spring_ai.enums.RateLimitErrorCode;
 import dev.thanh.spring_ai.exception.RateLimitException;
+import dev.thanh.spring_ai.utils.SafeRedisExecutor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -29,6 +30,7 @@ public class RateLimitService {
 
     private final StringRedisTemplate redisTemplate;
     private final RateLimitProperties props;
+    private final SafeRedisExecutor safeRedis;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Lua Script 1: Token Bucket (atomic refill + consume)
@@ -52,29 +54,35 @@ public class RateLimitService {
         DAILY_QUOTA_SCRIPT.setScriptSource(new ResourceScriptSource(new ClassPathResource("lua/daily_quota.lua")));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Public API
-    // ─────────────────────────────────────────────────────────────────────────
-
-
 
     // ─────────────────────────────────────────────────────────────────────────
     // Layer 1: Token Bucket
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Check token bucket rate limit — protected by CircuitBreaker.
+     * <p>
+     * Fail-open strategy: khi Redis down → cho phép request đi tiếp.
+     * Lý do: rate limit là bảo vệ phụ, không nên block user khi infra lỗi.
+     * Khi Redis recovery → CB CLOSED → rate limit tự động hoạt động lại.
+     */
     public void checkTokenBucket(String userId) {
         String bucketKey = BUCKET_KEY_PREFIX + userId;
         long nowMs = System.currentTimeMillis();
 
-        List result = redisTemplate.execute(
-                TOKEN_BUCKET_SCRIPT,
-                List.of(bucketKey),
-                String.valueOf(props.getBucketCapacity()),
-                String.valueOf(props.getRefillRatePerSecond()),
-                String.valueOf(nowMs));
+        List result = safeRedis.executeWithFallback(
+                () -> redisTemplate.execute(
+                        TOKEN_BUCKET_SCRIPT,
+                        List.of(bucketKey),
+                        String.valueOf(props.getBucketCapacity()),
+                        String.valueOf(props.getRefillRatePerSecond()),
+                        String.valueOf(nowMs)),
+                () -> null,   // fail-open: trả null → cho qua
+                "checkTokenBucket"
+        );
 
         if (result == null) {
-            log.warn("Token bucket Redis call returned null for user={}, fail-open", userId);
+            log.warn("Token bucket check skipped for user={} (Redis unavailable), fail-open", userId);
             return;
         }
 
@@ -93,6 +101,13 @@ public class RateLimitService {
     // Layer 2: Daily Token Quota
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Check daily token quota — protected by CircuitBreaker.
+     * <p>
+     * Fail-open strategy: khi Redis down → cho phép request đi tiếp.
+     * Trade-off: user có thể vượt quota tạm thời trong thời gian Redis down,
+     * nhưng không gây hại vì LLM API có rate limit riêng.
+     */
     public void checkDailyTokenQuota(String userId, int inputTokens) {
         String today = LocalDate.now(ZoneOffset.UTC).format(DATE_FMT);
         String dailyKey = DAILY_TOKENS_KEY_PREFIX + userId + ":" + today;
@@ -100,15 +115,19 @@ public class RateLimitService {
         // TTL = 25h (1h buffer to avoid midnight edge-cases)
         long dailyTtlSeconds = 25L * 60 * 60;
 
-        List result = redisTemplate.execute(
-                DAILY_QUOTA_SCRIPT,
-                List.of(dailyKey),
-                String.valueOf(props.getDailyTokenLimit()),
-                String.valueOf(inputTokens),
-                String.valueOf(dailyTtlSeconds));
+        List result = safeRedis.executeWithFallback(
+                () -> redisTemplate.execute(
+                        DAILY_QUOTA_SCRIPT,
+                        List.of(dailyKey),
+                        String.valueOf(props.getDailyTokenLimit()),
+                        String.valueOf(inputTokens),
+                        String.valueOf(dailyTtlSeconds)),
+                () -> null,   // fail-open: trả null → cho qua
+                "checkDailyQuota"
+        );
 
         if (result == null) {
-            log.warn("Daily quota Redis call returned null for user={}, fail-open", userId);
+            log.warn("Daily quota check skipped for user={} (Redis unavailable), fail-open", userId);
             return;
         }
 

@@ -22,6 +22,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -55,6 +56,8 @@ class ChatSessionServiceTest {
     private RedisStreamService redisStreamService;
     @Mock
     private ApplicationEventPublisher eventPublisher;
+    @Mock
+    private TransactionTemplate transactionTemplate;
 
     @InjectMocks
     private ChatSessionService chatSessionService;
@@ -90,6 +93,11 @@ class ChatSessionServiceTest {
             when(uuidV7Generator.generate()).thenReturn(newId);
             Session saved = buildSession(newId, USER_UUID, true);
             when(sessionRepository.save(any(Session.class))).thenReturn(saved);
+            // TransactionTemplate pass-through: execute the callback
+            when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+                org.springframework.transaction.support.TransactionCallback<?> callback = invocation.getArgument(0);
+                return callback.doInTransaction(null);
+            });
 
             // When
             String result = chatSessionService.getOrCreateSession(null, USER_ID);

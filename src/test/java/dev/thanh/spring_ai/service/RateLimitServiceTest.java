@@ -3,6 +3,7 @@ package dev.thanh.spring_ai.service;
 import dev.thanh.spring_ai.config.RateLimitProperties;
 import dev.thanh.spring_ai.enums.RateLimitErrorCode;
 import dev.thanh.spring_ai.exception.RateLimitException;
+import dev.thanh.spring_ai.utils.SafeRedisExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,12 +17,14 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -35,6 +38,9 @@ class RateLimitServiceTest {
         @Mock
         private RateLimitProperties props;
 
+        @Mock
+        private SafeRedisExecutor safeRedis;
+
         @InjectMocks
         private RateLimitService rateLimitService;
 
@@ -47,6 +53,31 @@ class RateLimitServiceTest {
                 when(props.getDailyTokenLimit()).thenReturn(10000L);
         }
 
+        /**
+         * Configure SafeRedisExecutor to pass-through to the actual Redis supplier.
+         * Call this at the start of tests that need normal Redis operation behavior.
+         */
+        @SuppressWarnings("unchecked")
+        private void stubSafeRedisPassThrough() {
+                when(safeRedis.executeWithFallback(any(Supplier.class), any(Supplier.class), anyString()))
+                        .thenAnswer(invocation -> {
+                                Supplier<?> supplier = invocation.getArgument(0);
+                                return supplier.get();
+                        });
+        }
+
+        /**
+         * Configure SafeRedisExecutor to invoke the fallback supplier (simulating Redis down).
+         */
+        @SuppressWarnings("unchecked")
+        private void stubSafeRedisFallback() {
+                when(safeRedis.executeWithFallback(any(Supplier.class), any(Supplier.class), anyString()))
+                        .thenAnswer(invocation -> {
+                                Supplier<?> fallback = invocation.getArgument(1);
+                                return fallback.get();
+                        });
+        }
+
         // ─────────────────────────────────────────────────────────
         // Layer 1: Token Bucket
         // ─────────────────────────────────────────────────────────
@@ -55,6 +86,7 @@ class RateLimitServiceTest {
         @DisplayName("checkTokenBucket — when allowed — should not throw")
         void checkTokenBucket_WhenAllowed_ShouldNotThrow() {
                 // Given: Redis returns [1 (allowed), 5 (tokensLeft), 0 (retryAfterSec)]
+                stubSafeRedisPassThrough();
                 when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
                                 .thenReturn(List.of(1L, 5L, 0L));
 
@@ -67,6 +99,7 @@ class RateLimitServiceTest {
         @DisplayName("checkTokenBucket — when blocked — should throw RateLimitException with TOO_MANY_REQUESTS")
         void checkTokenBucket_WhenBlocked_ShouldThrowRateLimitException() {
                 // Given: Redis returns [0 (blocked), 0 (tokensLeft), 10 (retry after 10s)]
+                stubSafeRedisPassThrough();
                 when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
                                 .thenReturn(List.of(0L, 0L, 10L));
 
@@ -83,9 +116,8 @@ class RateLimitServiceTest {
         @Test
         @DisplayName("checkTokenBucket — when Redis returns null — should fail-open (no exception)")
         void checkTokenBucket_WhenRedisReturnsNull_ShouldFailOpen() {
-                // Given: Redis returns null (e.g. connection issue)
-                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                                .thenReturn(null);
+                // Given: SafeRedisExecutor returns fallback (null) when Redis fails
+                stubSafeRedisFallback();
 
                 // When / Then — fail-open: no exception thrown
                 assertThatCode(() -> rateLimitService.checkTokenBucket(USER_ID))
@@ -100,6 +132,7 @@ class RateLimitServiceTest {
         @DisplayName("checkDailyTokenQuota — when within limit — should not throw")
         void checkDailyTokenQuota_WhenWithinLimit_ShouldNotThrow() {
                 // Given: Redis returns [1 (allowed), 100 (used), 10000 (limit)]
+                stubSafeRedisPassThrough();
                 when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
                                 .thenReturn(List.of(1L, 100L, 10000L));
 
@@ -112,6 +145,7 @@ class RateLimitServiceTest {
         @DisplayName("checkDailyTokenQuota — when exceeded — should throw RateLimitException with DAILY_TOKEN_LIMIT_EXCEEDED")
         void checkDailyTokenQuota_WhenExceeded_ShouldThrowRateLimitException() {
                 // Given: Redis returns [0 (blocked), 10000 (used), 10000 (limit)]
+                stubSafeRedisPassThrough();
                 when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
                                 .thenReturn(List.of(0L, 10000L, 10000L));
 
@@ -130,9 +164,8 @@ class RateLimitServiceTest {
         @Test
         @DisplayName("checkDailyTokenQuota — when Redis returns null — should fail-open (no exception)")
         void checkDailyTokenQuota_WhenRedisReturnsNull_ShouldFailOpen() {
-                // Given: Redis returns null
-                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                                .thenReturn(null);
+                // Given: SafeRedisExecutor returns fallback (null) when Redis fails
+                stubSafeRedisFallback();
 
                 // When / Then
                 assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
