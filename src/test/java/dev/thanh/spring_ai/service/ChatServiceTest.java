@@ -41,8 +41,10 @@ class ChatServiceTest {
     @Mock private LlmService llmService;
     @Mock private UuidV7Generator uuidV7Generator;
     @Mock private ChatSessionService chatSessionService;
+    @Mock private SessionActivityService sessionActivityService;
     @Mock private TokenCounterService tokenCounterService;
     @Mock private RateLimitService rateLimitService;
+    @Mock private ChatMetricsService chatMetrics;
 
     @InjectMocks
     private ChatService chatService;
@@ -59,6 +61,10 @@ class ChatServiceTest {
         ReflectionTestUtils.setField(chatService, "modelName", MODEL_NAME);
         // Default behaviors
         lenient().when(uuidV7Generator.generate()).thenReturn(UUID.randomUUID());
+
+        // ChatMetricsService stubs — mock returns for getter methods used in chat pipeline
+        lenient().when(chatMetrics.getActiveStreams()).thenReturn(new java.util.concurrent.atomic.AtomicInteger(0));
+        lenient().when(chatMetrics.startStreamTimer()).thenReturn(io.micrometer.core.instrument.Timer.start());
     }
 
     // ─────────────────────────────────────────────────────────
@@ -66,23 +72,16 @@ class ChatServiceTest {
     // ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("chatStream — when token bucket exceeded (Layer 1) — should re-emit RateLimitException")
-    void chatStream_WhenRateLimitExceeded_ShouldReEmitRateLimitException() {
+    @DisplayName("chatStream — when token bucket exceeded (Layer 1) — should re-throw RateLimitException")
+    void chatStream_WhenRateLimitExceeded_ShouldReThrowRateLimitException() {
         // Given
         doThrow(new RateLimitException(RateLimitErrorCode.TOO_MANY_REQUESTS, 10L))
                 .when(rateLimitService).checkTokenBucket(USER_ID);
         ChatMessageRequest request = new ChatMessageRequest("Hello", SESSION_ID);
 
-        // When
-        Flux<ChatResponse> result = chatService.chatStream(request, USER_ID);
-
-        // Then — emit error response (catch block returns ERROR type)
-        StepVerifier.create(result)
-                .assertNext(response -> {
-                    assertThat(response.getType()).isEqualTo(ResponseType.ERROR);
-                    assertThat(response.getContent()).contains("Xin lỗi");
-                })
-                .verifyComplete();
+        // When / Then — RateLimitException re-thrown (not wrapped), controller handles HTTP 429
+        org.junit.jupiter.api.Assertions.assertThrows(RateLimitException.class,
+                () -> chatService.chatStream(request, USER_ID));
     }
 
     // ─────────────────────────────────────────────────────────

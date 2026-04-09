@@ -8,6 +8,7 @@ import dev.thanh.spring_ai.dto.response.ChatResponse;
 import dev.thanh.spring_ai.enums.MessageRole;
 import dev.thanh.spring_ai.enums.ResponseType;
 import dev.thanh.spring_ai.exception.RateLimitException;
+import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
@@ -39,13 +40,22 @@ public class ChatService {
     private final Executor virtualThreadExecutor;
     private final TokenCounterService tokenCounterService;
     private final RateLimitService rateLimitService;
+    private final ChatMetricsService chatMetrics;
 
     @Value("${spring.ai.google.genai.chat.options.model:gemini-2.5-flash}")
     private String modelName;
 
     public Flux<ChatResponse> chatStream(ChatMessageRequest request, String userId) {
+        // Rate limit check first — throws RateLimitException (→ HTTP 429) trước khi vào pipeline
+        rateLimitService.checkTokenBucket(userId);
+
+        // ── Metrics: đếm request + bắt đầu đo stream duration ──
+        // Khai báo NGOÀI try để catch block có thể stop đúng instance này
+        chatMetrics.incrementTotalRequests();
+        chatMetrics.getActiveStreams().incrementAndGet();
+        Timer.Sample streamTimer = chatMetrics.startStreamTimer();
+
         try {
-            rateLimitService.checkTokenBucket(userId);
 
             boolean isNewSession = !StringUtils.hasText(request.sessionId());
 
@@ -64,6 +74,7 @@ public class ChatService {
 
             MessageDTO userMessage = buildUserMessage(sessionId, request.message());
             redisStreamService.pushToStream(userMessage);
+            chatMetrics.incrementRedisStreamPushed();
 
             return Mono.zip(
                     Mono.fromFuture(historyFuture),
@@ -87,6 +98,7 @@ public class ChatService {
                         // Phân loại lỗi: client disconnect → WARN, infrastructure error → ERROR
                         // Đảm bảo production vẫn trigger alert cho lỗi thật (LLM timeout, DB failure)
                         // mà không bị noise từ client tự ngắt kết nối
+                        chatMetrics.incrementStreamErrors();
                         if (isClientDisconnect(e)) {
                             log.warn("Client disconnected during stream: {}", e.getMessage());
                         } else {
@@ -99,9 +111,17 @@ public class ChatService {
                                 .type(ResponseType.ERROR)
                                 .timestamp(ZonedDateTime.now())
                                 .build());
+                    })
+                    // ── Metrics: dừng timer + giảm active streams khi stream kết thúc ──
+                    .doFinally(signal -> {
+                        chatMetrics.getActiveStreams().decrementAndGet();
+                        chatMetrics.stopStreamTimer(streamTimer);
                     });
         } catch (Exception e) {
             log.error("Chat stream initialization error: ", e);
+            chatMetrics.incrementStreamErrors();
+            chatMetrics.getActiveStreams().decrementAndGet();
+            chatMetrics.stopStreamTimer(streamTimer);
             return Flux.just(ChatResponse.builder()
                     .content("Xin lỗi, không thể khởi tạo chat: " + e.getMessage())
                     .role(MessageRole.ASSISTANT)
@@ -157,6 +177,7 @@ public class ChatService {
         CompletableFuture.runAsync(() -> {
             MessageDTO assistantMessage = buildAssistantMessage(sessionId, aiContent);
             redisStreamService.pushToStream(assistantMessage);
+            chatMetrics.incrementRedisStreamPushed();
             redisStreamService.updateHistoryCachePipeline(userMessage, assistantMessage);
         }, virtualThreadExecutor);
     }

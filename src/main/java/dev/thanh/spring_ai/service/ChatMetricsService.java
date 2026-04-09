@@ -29,7 +29,7 @@ public class ChatMetricsService {
     private final Counter streamErrors;
     private final Counter redisStreamPushed;
 
-    // ── Timers ────────────────────────────────────────────────────────────
+    // ── Timers ─────────────────────────────── ─────────────────────────────
     private final Timer streamDuration;
     private final Timer batchInsertDuration;
 

@@ -1,9 +1,13 @@
 package dev.thanh.spring_ai.service;
 
 
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,11 +50,20 @@ class LlmServiceTest {
     // Test-only registry with aggressive thresholds to trigger OPEN easily
     private CircuitBreakerRegistry sensitiveRegistry;
 
+    // Registries needed by LlmService constructor
+    private RateLimiterRegistry rateLimiterRegistry;
+    private BulkheadRegistry bulkheadRegistry;
+    private MeterRegistry meterRegistry;
+
     private LlmService llmService;
 
     @BeforeEach
     void setUp() {
         defaultRegistry = CircuitBreakerRegistry.ofDefaults();
+        rateLimiterRegistry = RateLimiterRegistry.ofDefaults();
+        bulkheadRegistry = BulkheadRegistry.ofDefaults();
+        meterRegistry = new SimpleMeterRegistry();
+
         sensitiveRegistry = CircuitBreakerRegistry.of(
                 CircuitBreakerConfig.custom()
                         .slidingWindowSize(1)
@@ -61,7 +74,7 @@ class LlmServiceTest {
                         .build()
         );
         // Use default registry by default — tests needing CB OPEN will override
-        llmService = new LlmService(chatClient, defaultRegistry);
+        llmService = new LlmService(chatClient, defaultRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -108,18 +121,15 @@ class LlmServiceTest {
     @Test
     @DisplayName("streamResponse — when timeout — should return fallback error message (not throw)")
     void streamResponse_WhenTimeout_ShouldReturnFallbackMessage() {
-        // Given: simulate a slow stream that times out
-        Flux<String> slowFlux = Flux.<String>never()
-                .timeout(Duration.ofMillis(50)); // faster timeout for test
-
-        mockStreamResponse(slowFlux);
+        // Given: Flux.never() — không emit gì, để production timeout 2 pha tự fire (30s phase 1)
+        // Retry 2 lần × 30s + backoff → tổng ~95s. Advance virtual time 120s để an toàn.
+        mockStreamResponse(Flux.never());
 
         // When & Then: onErrorResume should catch timeout and emit a single error message
         StepVerifier.withVirtualTime(() ->
-                        llmService.streamResponse("query", "ctx", Collections.emptyList())
-                                .take(Duration.ofSeconds(100))) // take long enough
-                .thenAwait(Duration.ofSeconds(60)) // Advance virtual time to cover 25s + 2s + 25s
-                .assertNext(msg -> assertThat(msg).contains("lỗi"))
+                        llmService.streamResponse("query", "ctx", Collections.emptyList()))
+                .thenAwait(Duration.ofSeconds(120))
+                .assertNext(msg -> assertThat(msg).containsAnyOf("lỗi", "Xin lỗi"))
                 .verifyComplete();
     }
 
@@ -149,7 +159,7 @@ class LlmServiceTest {
     @DisplayName("streamResponse — when CB is OPEN — should fail-fast with unavailable message (no 60s wait)")
     void streamResponse_WhenCircuitBreakerOpen_ShouldFailFast() {
         // Given: use sensitive registry, force CB into OPEN state
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
 
         // Manually transition to OPEN
@@ -171,7 +181,7 @@ class LlmServiceTest {
     @DisplayName("streamResponse — after enough failures — CB should OPEN and subsequent calls fail-fast")
     void streamResponse_AfterFailures_CircuitShouldOpen_AndSubsequentCallsFailFast() {
         // Given: sensitive registry (1 failure = OPEN)
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
 
         // First call: mock Gemini error — this triggers CB to OPEN (1 failure = 100% rate)
@@ -193,7 +203,7 @@ class LlmServiceTest {
     @DisplayName("generateTitle — when CB is OPEN — should return Mono.empty (silent fallback)")
     void generateTitle_WhenCircuitBreakerOpen_ShouldReturnEmpty() {
         // Given: force CB into OPEN state
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
         cb.transitionToOpenState();
 
@@ -209,13 +219,15 @@ class LlmServiceTest {
     @Test
     @DisplayName("generateTitle — happy path — should return trimmed title")
     void generateTitle_WhenSuccess_ShouldReturnTrimmedTitle() {
-        // Given
+        // Given: mock the fluent chain: prompt() → options() → user() → call() → content()
         ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.ChatClientRequestSpec optionsSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
 
         when(chatClient.prompt()).thenReturn(requestSpec);
-        when(requestSpec.user(anyString())).thenReturn(userSpec);
+        when(requestSpec.options(any())).thenReturn(optionsSpec);
+        when(optionsSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenReturn("  My First Chat  ");
 
@@ -228,13 +240,15 @@ class LlmServiceTest {
     @Test
     @DisplayName("generateTitle — when Gemini fails — should return Mono.empty (silent fallback)")
     void generateTitle_WhenFails_ShouldReturnEmpty() {
-        // Given
+        // Given: mock the fluent chain: prompt() → options() → user() → call() → content()
         ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.ChatClientRequestSpec optionsSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
 
         when(chatClient.prompt()).thenReturn(requestSpec);
-        when(requestSpec.user(anyString())).thenReturn(userSpec);
+        when(requestSpec.options(any())).thenReturn(optionsSpec);
+        when(optionsSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenThrow(new RuntimeException("Gemini 429"));
 

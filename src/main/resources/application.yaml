@@ -148,7 +148,7 @@ security:
     google:
       client-id: ${GOOGLE_CLIENT_ID}
 
-# ── Resilience4j — Circuit Breaker ────────────────────────────────────
+# ── Resilience4j ───────────────────────────────────────────────────────
 resilience4j:
   circuitbreaker:
     instances:
@@ -168,15 +168,55 @@ resilience4j:
           - java.lang.RuntimeException
         ignore-exceptions:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - io.github.resilience4j.ratelimiter.RequestNotPermitted
+          - io.github.resilience4j.bulkhead.BulkheadFullException
+      # Redis CB — tuned cho fast detection (Redis operations phải sub-second)
+      redis:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10               # 10 calls gần nhất — detect nhanh hơn
+        minimum-number-of-calls: 5            # Bắt đầu evaluate sau 5 calls
+        failure-rate-threshold: 50            # OPEN khi ≥50% failure (5/10 calls fail)
+        slow-call-rate-threshold: 80          # OPEN khi ≥80% slow calls
+        slow-call-duration-threshold: 500ms   # Redis >500ms = slow (bình thường <5ms)
+        wait-duration-in-open-state: 30s      # Thử lại sau 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.data.redis.RedisConnectionFailureException
+          - io.lettuce.core.RedisCommandTimeoutException
+          - org.springframework.dao.QueryTimeoutException
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+
+  # ── RateLimiter — Global RPM control cho Gemini API ──────────────────
+  ratelimiter:
+    instances:
+      llm-gemini:
+        limit-for-period: 90            # 90 RPM (headroom 10% từ 100 RPM)
+        limit-refresh-period: 60s       # 1 period = 60 giây
+        timeout-duration: 5s            # Chờ tối đa 5s nếu hết quota, sau đó reject
+        register-health-indicator: true
+        event-consumer-buffer-size: 100
+
+  # ── Bulkhead — Concurrent call isolation ─────────────────────────────
+  bulkhead:
+    instances:
+      llm-gemini:
+        max-concurrent-calls: 15        # Tối đa 15 LLM streams đồng thời
+        max-wait-duration: 3s           # Chờ tối đa 3s nếu bulkhead full
 
 # ── Actuator / Metrics ─────────────────────────────────────────────────
 management:
   endpoints:
     web:
       exposure:
-        include: health,metrics,circuitbreakers,prometheus
+        include: health,metrics,circuitbreakers,ratelimiters,bulkheads,prometheus
   health:
     circuitbreakers:
+      enabled: true
+    ratelimiters:
+      enabled: true
+    bulkheads:
       enabled: true
   endpoint:
     health:
