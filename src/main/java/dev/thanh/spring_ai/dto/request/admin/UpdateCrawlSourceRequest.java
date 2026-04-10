@@ -1,6 +1,8 @@
 package dev.thanh.spring_ai.dto.request.admin;
 
 import dev.thanh.spring_ai.enums.CrawlSourceStatus;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.Data;
@@ -17,6 +19,8 @@ public class UpdateCrawlSourceRequest {
 
     private String cronSchedule;
 
+    @Min(value = 1, message = "Max depth must be at least 1")
+    @Max(value = 10, message = "Max depth must not exceed 10")
     private Integer maxDepth;
 
     private CrawlSourceStatus status;

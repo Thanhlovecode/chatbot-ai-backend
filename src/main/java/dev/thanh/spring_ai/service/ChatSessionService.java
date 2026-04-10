@@ -251,10 +251,13 @@ public class ChatSessionService {
     @Transactional(readOnly = true)
     public CursorResponse<SessionResponse> getUserSessionsCursor(String userId, String cursor, int limit) {
 
+        // Clamp limit vào [1, 100] — ngăn client gửi limit=999999 query toàn bộ DB
+        limit = Math.clamp(limit, 1, 100);
+
         // Check Redis ZSET size — cold start fallback nếu trống
         Long zsetSize = sessionActivityService.getZSetSize(userId);
         if (zsetSize == null || zsetSize == 0) {
-            return fallbackToDb(userId, cursor, limit);
+            return fallbackToDb(userId, cursor, limit, true);
         }
 
         // Parse cursor → upper bound score (exclusive)
@@ -279,7 +282,8 @@ public class ChatSessionService {
         if (tuples == null || tuples.isEmpty()) {
             // Redis đã hết data trong vùng score này (ZSET chỉ cache ~5 trang đầu).
             // Fallback xuống DB để tiếp tục phân trang các trang sâu hơn.
-            return fallbackToDb(userId, cursor, limit);
+            // isColdStart=false: KHÔNG warm up vì ZSET đã có top-50, add sessions cũ sẽ bị trim ngay.
+            return fallbackToDb(userId, cursor, limit, false);
         }
 
         // Collect ordered session IDs từ Redis
@@ -344,11 +348,16 @@ public class ChatSessionService {
     }
 
     /**
-     * Fallback khi Redis ZSET trống (cold start / cache miss).
-     * Query DB theo updated_at DESC, trả kết quả, và warm up Redis ZSET.
+     * Fallback khi Redis ZSET trống (cold start) hoặc deep pagination vượt quá cache.
+     * Query DB theo updated_at DESC, trả kết quả.
+     * Chỉ warm up Redis ZSET khi {@code isColdStart=true} — tránh warm up vô nghĩa
+     * ở deep pages (sessions cũ sẽ bị trim ngay bởi MAX_ZSET_SIZE).
+     *
+     * @param isColdStart true nếu ZSET hoàn toàn trống, false nếu deep pagination
      */
-    private CursorResponse<SessionResponse> fallbackToDb(String userId, String cursor, int limit) {
-        log.warn("Redis ZSET empty for user {}, falling back to DB", userId);
+    private CursorResponse<SessionResponse> fallbackToDb(String userId, String cursor, int limit,
+            boolean isColdStart) {
+        log.warn("Falling back to DB for user {} (coldStart={})", userId, isColdStart);
 
         // Parse cursor: format "epochMillis::sessionId" — cả 2 phần đều được dùng
         // epochMillis → lastUpdatedAt (cursor chính)
@@ -389,8 +398,10 @@ public class ChatSessionService {
                         .build())
                 .toList();
 
-        // Warm up Redis ZSET từ DB results (pipeline, 1 round-trip)
-        if (!sessions.isEmpty()) {
+        // Warm up Redis ZSET chỉ khi cold start.
+        // Deep pagination (isColdStart=false): ZSET đã có top-50 sessions mới nhất,
+        // add sessions cũ hơn sẽ bị ZREMRANGEBYRANK trim ngay → wasted round-trip.
+        if (isColdStart && !sessions.isEmpty()) {
             Map<String, Double> scores = new LinkedHashMap<>();
             for (Session s : sessions) {
                 double score = (double) s.getUpdatedAt()
@@ -420,6 +431,10 @@ public class ChatSessionService {
     @Transactional(readOnly = true)
     public CursorResponse<ChatMessageResponse> getMessagesCursor(String sessionId, String userId, String cursor,
             int limit) {
+
+        // Clamp limit vào [1, 100] — ngăn client gửi limit=999999 query toàn bộ DB
+        limit = Math.clamp(limit, 1, 100);
+
         UUID sid = UUID.fromString(sessionId);
         UUID uid = UUID.fromString(userId);
 

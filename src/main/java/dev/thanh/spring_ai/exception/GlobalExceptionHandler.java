@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
+import jakarta.validation.ConstraintViolationException;
+
 import java.io.IOException;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
@@ -48,6 +50,35 @@ public class GlobalExceptionHandler {
             // Các lỗi IO nghiêm trọng khác (như hỏng ổ cứng, file) thì mới log error
             log.error("Unexpected IO Error: ", ex);
         }
+    }
+
+    /**
+     * Bắt lỗi Bean Validation trên @RequestParam / @PathVariable
+     * (trigger bởi @Validated trên class + @Min/@Max trên parameter).
+     * Khác với MethodArgumentNotValidException (chỉ cho @RequestBody DTO).
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ResponseData<Map<String, String>>> handleConstraintViolation(
+            ConstraintViolationException ex) {
+        Map<String, String> errors = new HashMap<>();
+        ex.getConstraintViolations().forEach(violation -> {
+            // "getSessions.limit" → "limit"
+            String paramName = violation.getPropertyPath().toString();
+            if (paramName.contains(".")) {
+                paramName = paramName.substring(paramName.lastIndexOf('.') + 1);
+            }
+            errors.put(paramName, violation.getMessage());
+        });
+
+        log.warn("Constraint violation: {}", errors);
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ResponseData.<Map<String, String>>builder()
+                        .status(HttpStatus.BAD_REQUEST.value())
+                        .message("Validation failed")
+                        .data(errors)
+                        .timestamp(ZonedDateTime.now())
+                        .build());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
