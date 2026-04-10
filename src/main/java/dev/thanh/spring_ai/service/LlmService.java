@@ -14,10 +14,11 @@ import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOper
 import io.github.resilience4j.reactor.ratelimiter.operator.RateLimiterOperator;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import dev.thanh.spring_ai.tools.JavaKnowledgeTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.NestedExceptionUtils;
@@ -46,21 +47,24 @@ public class LlmService implements LlmServicePort {
     private final RateLimiter rateLimiter;
     private final Bulkhead bulkhead;
     private final MeterRegistry meterRegistry;
+    private final JavaKnowledgeTools knowledgeTool;
 
-    @Value("classpath:prompts/rag-prompt.st")
-    private Resource ragSystemPrompt;
+    @Value("classpath:prompts/agentic-system-prompt.st")
+    private Resource agenticSystemPrompt;
 
     public LlmService(ChatClient chatClient,
             CircuitBreakerRegistry circuitBreakerRegistry,
             RateLimiterRegistry rateLimiterRegistry,
             BulkheadRegistry bulkheadRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            JavaKnowledgeTools knowledgeTool) {
         this.chatClient = chatClient;
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_NAME);
         this.rateLimiter = rateLimiterRegistry.rateLimiter(RESILIENCE_NAME);
         this.bulkhead = bulkheadRegistry.bulkhead(RESILIENCE_NAME);
         this.meterRegistry = meterRegistry;
-        log.info("LlmService initialized — CB: {}, RL: limitForPeriod={}, BH: maxConcurrent={}",
+        this.knowledgeTool = knowledgeTool;
+        log.info("LlmService initialized — Agentic RAG mode | CB: {}, RL: limitForPeriod={}, BH: maxConcurrent={}",
                 RESILIENCE_NAME,
                 rateLimiter.getRateLimiterConfig().getLimitForPeriod(),
                 bulkhead.getBulkheadConfig().getMaxConcurrentCalls());
@@ -71,24 +75,25 @@ public class LlmService implements LlmServicePort {
     // ═══════════════════════════════════════════════════════════════════════
 
     @Override
-    public Flux<String> streamResponse(String userMsg, String ragContext, List<Message> history) {
-        log.info("Requesting Gemini stream. UserMsg length: {}, RAG Context length: {}",
-                userMsg.length(), ragContext.length());
+    public Flux<String> streamResponse(String userMsg, List<Message> history) {
+        log.info("Requesting Gemini stream (Agentic RAG). UserMsg length: {}", userMsg.length());
 
         AtomicBoolean hasEmittedData = new AtomicBoolean(false);
         AtomicBoolean ttfbStopped = new AtomicBoolean(false);
 
         // Đo TTFB (Time To First Byte) — từ lúc gọi method → token đầu tiên
-        // Bao gồm thời gian xếp hàng RL/BH → phản ánh TTFB thực từ góc user
+        // Bao gồm thời gian xếp hàng RL/BH + tool execution → phản ánh TTFB thực từ góc
+        // user
         Timer.Sample ttfbTimer = Timer.start(meterRegistry);
 
         return chatClient.prompt()
-                .system(s -> s.text(ragSystemPrompt).param("information", ragContext))
+                .system(agenticSystemPrompt)
                 .messages(history)
                 .user(userMsg)
+                .tools(knowledgeTool) // Agentic RAG — Gemini tự quyết định khi nào gọi tool
                 .stream()
                 .content()
-                .doOnSubscribe(s -> log.info("Gemini stream subscribed"))
+                .doOnSubscribe(s -> log.info("Gemini stream subscribed (tools: JavaKnowledgeTools)"))
 
                 // ── Đánh dấu đã emit data + ghi TTFB metric ──
                 .doOnNext(token -> {
@@ -106,7 +111,7 @@ public class LlmService implements LlmServicePort {
                 // ── TIMEOUT 2 PHA ──────────────────────────────────────
                 // Phase 1: Đợi tối đa 30s cho token đầu tiên (Gemini cold start / thinking)
                 // Phase 2: Từ token thứ 2 trở đi, chỉ cho phép idle tối đa 5s giữa các token
-                .timeout(Mono.delay(Duration.ofSeconds(30)), v -> Mono.delay(Duration.ofSeconds(5)))
+                .timeout(Mono.delay(Duration.ofSeconds(60)), v -> Mono.delay(Duration.ofSeconds(5)))
 
                 // ── Resilience4j Stack: bọc từ trong ra ngoài ──────────
                 // Thứ tự subscribe (ngoài → trong): RL → BH → CB → stream
@@ -140,7 +145,7 @@ public class LlmService implements LlmServicePort {
 
     // ═══════════════════════════════════════════════════════════════════════
     // generateTitle — Chỉ CircuitBreaker, KHÔNG cần RateLimiter/Bulkhead
-    // Model gemini-2.0-flash-lite có RPM quota riêng.
+    // Dùng chung default model từ config (application.yaml).
     // ═══════════════════════════════════════════════════════════════════════
 
     @Override
@@ -152,9 +157,6 @@ public class LlmService implements LlmServicePort {
                 Message: %s
                 """.formatted(userMsg);
         return Mono.fromCallable(() -> chatClient.prompt()
-                .options(GoogleGenAiChatOptions.builder()
-                        .model("gemini-2.0-flash-lite")
-                        .build())
                 .user(titlePrompt)
                 .call()
                 .content())

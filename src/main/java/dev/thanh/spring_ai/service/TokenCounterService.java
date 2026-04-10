@@ -33,21 +33,18 @@ public class TokenCounterService {
     }
 
     /**
-     * Count input tokens for the full prompt sent to the LLM:
-     * system prompt + RAG context + conversation history + user question.
+     * Count input tokens for the prompt sent to the LLM:
+     * conversation history + user question.
+     * <p>
+     * Note: RAG context is handled internally by Agentic RAG (tool calling),
+     * so it's not included in this count. Token quota tracks user-facing input only.
      *
-     * @param systemPromptText system prompt template text (with RAG filled in)
-     * @param history          previous conversation messages
-     * @param userQuestion     the current user question
+     * @param history      previous conversation messages
+     * @param userQuestion the current user question
      * @return estimated total input token count
      */
-    public int countInputTokens(String systemPromptText, List<Message> history, String userQuestion) {
+    public int countInputTokens(List<Message> history, String userQuestion) {
         StringBuilder sb = new StringBuilder();
-
-        // System prompt (includes RAG context already injected)
-        if (systemPromptText != null && !systemPromptText.isBlank()) {
-            sb.append(systemPromptText).append('\n');
-        }
 
         // Conversation history
         if (history != null) {

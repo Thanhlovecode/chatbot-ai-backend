@@ -37,7 +37,6 @@ import static org.mockito.Mockito.*;
 class ChatServiceTest {
 
     @Mock private RedisStreamService redisStreamService;
-    @Mock private RagService ragService;
     @Mock private LlmService llmService;
     @Mock private UuidV7Generator uuidV7Generator;
     @Mock private ChatSessionService chatSessionService;
@@ -95,8 +94,7 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(SESSION_ID, USER_ID)).thenReturn(SESSION_ID);
         when(chatSessionService.prepareHistory(anyString(), anyBoolean())).thenReturn(List.of());
-        when(ragService.searchSimilarity(anyString())).thenReturn("context");
-        when(tokenCounterService.countInputTokens(any(), any(), any())).thenReturn(500);
+        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(500);
         doThrow(new RateLimitException(RateLimitErrorCode.DAILY_TOKEN_LIMIT_EXCEEDED, 10000L, 10000L))
                 .when(rateLimitService).checkDailyTokenQuota(USER_ID, 500);
 
@@ -123,10 +121,9 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(SESSION_ID, USER_ID)).thenReturn(SESSION_ID);
         when(chatSessionService.prepareHistory(anyString(), eq(false))).thenReturn(List.of());
-        when(ragService.searchSimilarity(anyString())).thenReturn("rag-context");
-        when(tokenCounterService.countInputTokens(any(), any(), any())).thenReturn(100);
+        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(100);
         doNothing().when(rateLimitService).checkDailyTokenQuota(anyString(), anyInt());
-        when(llmService.streamResponse(anyString(), anyString(), anyList()))
+        when(llmService.streamResponse(anyString(), anyList()))
                 .thenReturn(Flux.just("Hello ", "World"));
         doNothing().when(redisStreamService).pushToStream(any());
 
@@ -157,10 +154,9 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(null, USER_ID)).thenReturn(newSessionId);
         when(chatSessionService.prepareHistory(anyString(), eq(true))).thenReturn(List.of());
-        when(ragService.searchSimilarity(anyString())).thenReturn("context");
-        when(tokenCounterService.countInputTokens(any(), any(), any())).thenReturn(50);
+        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(50);
         doNothing().when(rateLimitService).checkDailyTokenQuota(anyString(), anyInt());
-        when(llmService.streamResponse(anyString(), anyString(), anyList()))
+        when(llmService.streamResponse(anyString(), anyList()))
                 .thenReturn(Flux.just("Hello"));
         when(llmService.generateTitle(anyString()))
                 .thenReturn(Mono.just("My First Chat Title"));
@@ -191,10 +187,9 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(SESSION_ID, USER_ID)).thenReturn(SESSION_ID);
         when(chatSessionService.prepareHistory(anyString(), anyBoolean())).thenReturn(List.of());
-        when(ragService.searchSimilarity(anyString())).thenReturn("ctx");
-        when(tokenCounterService.countInputTokens(any(), any(), any())).thenReturn(100);
+        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(100);
         doNothing().when(rateLimitService).checkDailyTokenQuota(anyString(), anyInt());
-        when(llmService.streamResponse(anyString(), anyString(), anyList()))
+        when(llmService.streamResponse(anyString(), anyList()))
                 .thenReturn(Flux.error(new RuntimeException("LLM connection failed")));
         doNothing().when(redisStreamService).pushToStream(any());
 

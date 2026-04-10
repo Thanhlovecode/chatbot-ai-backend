@@ -32,7 +32,6 @@ import java.util.concurrent.Executor;
 public class ChatService {
 
     private final RedisStreamService redisStreamService;
-    private final RagServicePort ragService;
     private final LlmServicePort llmService;
     private final UuidV7Generator uuidV7Generator;
     private final ChatSessionService chatSessionService;
@@ -59,8 +58,6 @@ public class ChatService {
 
             boolean isNewSession = !StringUtils.hasText(request.sessionId());
 
-            CompletableFuture<String> ragContextFuture = loadRagContextAsync(request.message());
-
             String sessionId = chatSessionService.getOrCreateSession(request.sessionId(), userId);
 
             // Touch session activity — fire-and-forget async để Redis failure KHÔNG block request path.
@@ -76,21 +73,17 @@ public class ChatService {
             redisStreamService.pushToStream(userMessage);
             chatMetrics.incrementRedisStreamPushed();
 
-            return Mono.zip(
-                    Mono.fromFuture(historyFuture),
-                    Mono.fromFuture(ragContextFuture))
-                    .flatMapMany(tuple -> {
-                        List<Message> history = tuple.getT1();
-                        String ragContext = tuple.getT2();
-                        log.info("Parallel futures completed. History size: {}, RAG context length: {}",
-                                history.size(), ragContext.length());
+            return Mono.fromFuture(historyFuture)
+                    .flatMapMany(history -> {
+                        log.info("History loaded. Size: {}", history.size());
 
-                        // ── Rate Limiting: count input tokens with JTokkit, then check quota ──
+                        // ── Rate Limiting: count input tokens (history + user msg only) ──
+                        // RAG context giờ nằm trong tool execution nội bộ LLM → không count ở đây
                         int inputTokens = tokenCounterService.countInputTokens(
-                                ragContext, history, request.message());
+                                history, request.message());
                         rateLimitService.checkDailyTokenQuota(userId, inputTokens);
 
-                        return generateStreamResponse(request.message(), ragContext, history, sessionId, userMessage,
+                        return generateStreamResponse(request.message(), history, sessionId, userMessage,
                                 isNewSession);
                     })
                     .onErrorResume(RateLimitException.class, e -> Flux.error(e))
@@ -131,9 +124,9 @@ public class ChatService {
         }
     }
 
-    private Flux<ChatResponse> generateStreamResponse(String userMessage, String ragContext, List<Message> history,
+    private Flux<ChatResponse> generateStreamResponse(String userMessage, List<Message> history,
             String sessionId, MessageDTO userMessageDTO, boolean isNewSession) {
-        Flux<ChatResponse> contentStream = createContentStream(userMessage, ragContext, history, sessionId,
+        Flux<ChatResponse> contentStream = createContentStream(userMessage, history, sessionId,
                 userMessageDTO);
 
         if (isNewSession) {
@@ -144,10 +137,10 @@ public class ChatService {
         return contentStream;
     }
 
-    private Flux<ChatResponse> createContentStream(String userMessage, String ragContext, List<Message> history,
+    private Flux<ChatResponse> createContentStream(String userMessage, List<Message> history,
             String sessionId, MessageDTO userMessageDTO) {
         StringBuilder contentCollector = new StringBuilder();
-        return llmService.streamResponse(userMessage, ragContext, history)
+        return llmService.streamResponse(userMessage, history)
                 .doOnNext(contentCollector::append) // Collect tokens regardless of downstream state
                 .map(token -> buildContentResponse(sessionId, token))
                 .doFinally(signal -> handleStreamCompletion(signal, sessionId, contentCollector.toString(),
@@ -188,15 +181,6 @@ public class ChatService {
                 virtualThreadExecutor).exceptionally(e -> {
                     log.error("Failed to load history for session {}: ", sessionId, e);
                     return Collections.emptyList();
-                });
-    }
-
-    private CompletableFuture<String> loadRagContextAsync(String message) {
-        return CompletableFuture.supplyAsync(
-                () -> ragService.searchSimilarity(message),
-                virtualThreadExecutor).exceptionally(e -> {
-                    log.error("Failed to load RAG context: ", e);
-                    return "No specific context available from the internal knowledge base.";
                 });
     }
 

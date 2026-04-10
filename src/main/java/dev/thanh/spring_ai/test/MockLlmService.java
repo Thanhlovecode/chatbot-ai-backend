@@ -43,7 +43,7 @@ public class MockLlmService implements LlmServicePort {
     };
 
     @Override
-    public Flux<String> streamResponse(String userMsg, String ragContext, List<Message> history) {
+    public Flux<String> streamResponse(String userMsg, List<Message> history) {
         // Giả lập occasional failure
         if (ThreadLocalRandom.current().nextDouble() < props.getFailureRate()) {
             log.warn("Mock LLM simulating failure for message: '{}'",

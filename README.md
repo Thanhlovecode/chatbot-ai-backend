@@ -1,6 +1,6 @@
 # 🤖 AI Chatbot — Backend
 
-> **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng RAG (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
+> **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng **Agentic RAG** (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
 
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
@@ -24,7 +24,7 @@
                     │       ▼             ▼        └───────┬────────┘         │
                     │  ┌───────────────────────────────────────────────────┐  │
                     │  │              Service Layer                         │  │
-                    │  │  RAG Pipeline (Hybrid: VectorSearch → Rerank)     │  │
+                    │  │  Agentic RAG (LLM Tool Calling → Search → Rerank) │  │
                     │  │  LLM (Gemini 2.5 Flash + 2-Phase Timeout)        │  │
                     │  │  Resilience (CB + RateLimiter + Bulkhead)         │  │
                     │  │  Redis Streams (Consumer Group + DLQ + Recovery)  │  │
@@ -80,9 +80,11 @@
 
 ## 🎯 Key Features
 
-### 🧠 Hybrid RAG Pipeline
+### 🧠 Agentic RAG Pipeline
 
-- **3-stage retrieval**: Vector Search (Qdrant) → Cross-Encoder Rerank (Cohere) → Context Assembly
+- **Agentic approach**: LLM (Gemini) tự quyết định khi nào cần tra cứu knowledge base thông qua **Tool Calling** — thay vì naive RAG (mọi câu hỏi đều qua Qdrant)
+- **3-stage retrieval** (khi tool được gọi): Vector Search (Qdrant) → Cross-Encoder Rerank (Cohere) → Context Assembly
+- **Tool resilience**: Timeout 10s + graceful fallback — nếu Qdrant down/chậm, LLM vẫn trả lời bằng general knowledge
 - **Dual VectorStore architecture**: Separate `RETRIEVAL_DOCUMENT` embeddings for indexing and `RETRIEVAL_QUERY` embeddings for search — follows Gemini's recommended task-type separation
 - **Matryoshka embedding**: `gemini-embedding-001` giảm từ 3072d → 768d, tiết kiệm 4x RAM Qdrant với ~95% chất lượng retrieval
 - **Smart document parser**: PDF → page-level reader (PagePdfDocumentReader), non-PDF → Apache Tika auto-detect
@@ -91,8 +93,8 @@
 ### 💬 Chat Streaming
 
 - **SSE (Server-Sent Events)** real-time streaming response
-- **Parallel async** loading: RAG context + conversation history loaded concurrently via `CompletableFuture` on Virtual Threads
-- **Auto title generation**: Session tự động đặt tên qua Gemini 2.0 Flash Lite (model riêng, không chiếm quota chính)
+- **Agentic tool execution**: LLM tự gọi `searchJavaSpringBootDocs` tool khi cần — không cần pre-load RAG context
+- **Auto title generation**: Session tự động đặt tên qua default model (dùng chung config)
 - **Conversation history**: Redis cache với LRU (20 messages) + PostgreSQL persistence
 
 ### 🛡️ Multi-Layer Resilience
@@ -101,7 +103,7 @@
 - **RateLimiter**: 90 RPM (headroom 10% từ Gemini's 100 RPM limit)
 - **Bulkhead**: Max 15 concurrent LLM streams
 - **CircuitBreaker**: COUNT_BASED sliding window, 50% failure threshold
-- **2-Phase Timeout**: 30s cho first token (cold start), 5s idle giữa các token
+- **2-Phase Timeout**: 60s cho first token (cold start + tool execution), 5s idle giữa các token
 - **Smart Retry**: Chỉ retry `TimeoutException` + `IOException`, KHÔNG retry nếu đã emit data (tránh duplicate text)
 - **Stack order**: Subscribe path: RL → BH → CB → Gemini stream
 
@@ -374,7 +376,7 @@ chatbot-ai-backend/
 │   │   ├── LoadTestController.java        # Load test auth bypass endpoint
 │   │   └── LoadTestSecurityConfig.java    # Security config for load test profile
 │   ├── tools/                             # AI function calling tools
-│   │   └── DateTimeTools.java             # Date/time tool for LLM
+│   │   └── JavaKnowledgeTools.java        # Agentic RAG tool (LLM-driven search)
 │   └── utils/                             # Utility classes
 │       ├── SafeRedisExecutor.java         # Centralized Redis CB wrapper
 │       └── SecurityUtils.java             # Auth context helpers
@@ -390,6 +392,7 @@ chatbot-ai-backend/
 │   │   ├── token_bucket.lua               # Atomic token bucket rate limiting
 │   │   └── daily_quota.lua                # Atomic daily token quota check
 │   ├── prompts/                           # AI prompt templates (StringTemplate)
+│   │   └── agentic-system-prompt.st       # Agentic RAG system instructions
 │   └── keys/                              # ⛔ Git-ignored RSA keys
 ├── src/test/                              # Test suites
 │   ├── java/                              # JUnit 5 + Mockito tests

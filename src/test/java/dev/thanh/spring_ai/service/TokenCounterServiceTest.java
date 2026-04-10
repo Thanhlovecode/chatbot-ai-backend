@@ -31,7 +31,6 @@ class TokenCounterServiceTest {
     @DisplayName("countInputTokens — full prompt — should return positive count")
     void countInputTokens_WithFullPrompt_ShouldReturnPositiveCount() {
         // Given
-        String systemPrompt = "You are a helpful assistant. Context: Java Spring Boot is awesome.";
         List<Message> history = List.of(
                 new UserMessage("What is Spring Boot?"),
                 new AssistantMessage("Spring Boot is an opinionated framework.")
@@ -39,7 +38,7 @@ class TokenCounterServiceTest {
         String userQuestion = "Can you explain dependency injection?";
 
         // When
-        int count = tokenCounterService.countInputTokens(systemPrompt, history, userQuestion);
+        int count = tokenCounterService.countInputTokens(history, userQuestion);
 
         // Then
         assertThat(count).isPositive();
@@ -50,14 +49,14 @@ class TokenCounterServiceTest {
     // ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("countInputTokens — null systemPrompt — should count only history + question")
-    void countInputTokens_WhenSystemPromptNull_ShouldCountOnlyOtherParts() {
+    @DisplayName("countInputTokens — null history — should count only question")
+    void countInputTokens_WhenHistoryNull_ShouldCountOnlyQuestion() {
         // Given
         List<Message> history = List.of(new UserMessage("Hello"));
         String userQuestion = "How are you?";
 
         // When
-        int count = tokenCounterService.countInputTokens(null, history, userQuestion);
+        int count = tokenCounterService.countInputTokens(history, userQuestion);
 
         // Then
         assertThat(count).isPositive();
@@ -67,11 +66,10 @@ class TokenCounterServiceTest {
     @DisplayName("countInputTokens — null history — should not throw")
     void countInputTokens_WhenHistoryNull_ShouldNotThrow() {
         // Given
-        String systemPrompt = "Context: Some info.";
         String userQuestion = "Question here.";
 
         // When
-        int count = tokenCounterService.countInputTokens(systemPrompt, null, userQuestion);
+        int count = tokenCounterService.countInputTokens(null, userQuestion);
 
         // Then
         assertThat(count).isPositive();
@@ -80,11 +78,8 @@ class TokenCounterServiceTest {
     @Test
     @DisplayName("countInputTokens — blank history — should not throw")
     void countInputTokens_WhenHistoryEmpty_ShouldNotThrow() {
-        // Given
-        String systemPrompt = "Context: Some info.";
-
         // When
-        int count = tokenCounterService.countInputTokens(systemPrompt, Collections.emptyList(), "Question");
+        int count = tokenCounterService.countInputTokens(Collections.emptyList(), "Question");
 
         // Then
         assertThat(count).isPositive();
@@ -94,7 +89,7 @@ class TokenCounterServiceTest {
     @DisplayName("countInputTokens — all blank inputs — should return zero or very low count")
     void countInputTokens_WhenAllBlankOrNull_ShouldReturnZeroOrVeryLow() {
         // Given / When
-        int count = tokenCounterService.countInputTokens(null, null, null);
+        int count = tokenCounterService.countInputTokens(null, null);
 
         // Then
         assertThat(count).isZero();
@@ -109,8 +104,8 @@ class TokenCounterServiceTest {
                 + "Can you explain the lifecycle of a Spring Bean in detail, including all phases?";
 
         // When
-        int shortCount = tokenCounterService.countInputTokens(null, null, shortQuestion);
-        int longCount = tokenCounterService.countInputTokens(null, null, longQuestion);
+        int shortCount = tokenCounterService.countInputTokens(null, shortQuestion);
+        int longCount = tokenCounterService.countInputTokens(null, longQuestion);
 
         // Then
         assertThat(longCount).isGreaterThan(shortCount);

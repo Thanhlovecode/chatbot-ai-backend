@@ -16,13 +16,15 @@ public interface LlmServicePort {
 
     /**
      * Stream response từ LLM.
+     * <p>
+     * RAG context được xử lý nội bộ qua Tool Calling (Agentic RAG) —
+     * LLM tự quyết định khi nào cần tra cứu knowledge base.
      *
-     * @param userMsg    câu hỏi của user
-     * @param ragContext context từ RAG pipeline
-     * @param history    lịch sử chat
+     * @param userMsg câu hỏi của user
+     * @param history lịch sử chat
      * @return Flux<String> — stream các token
      */
-    Flux<String> streamResponse(String userMsg, String ragContext, List<Message> history);
+    Flux<String> streamResponse(String userMsg, List<Message> history);
 
     /**
      * Tạo tiêu đề cho session từ câu hỏi đầu tiên.
