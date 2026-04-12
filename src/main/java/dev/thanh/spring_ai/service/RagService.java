@@ -21,6 +21,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 @Service
@@ -41,6 +43,10 @@ public class RagService implements RagServicePort {
     private final HybridRagProperties ragProperties;
     private final UuidV7Generator uuidGenerator;
     private final DocumentParserService documentParserService;
+
+    // ─── Semantic Cache (Event-Driven Invalidation) ──────────────────────
+    private final Optional<SemanticCacheService> semanticCacheService;
+    private final Executor virtualThreadExecutor;
 
     // ─── Retrieval Beans ──────────────────────────────────────────────────
     @Qualifier("queryVectorStore")
@@ -106,6 +112,13 @@ public class RagService implements RagServicePort {
 
         log.info("[DONE] Successfully indexed {} total chunks from '{}' ({} pages)",
                 totalChunksIndexed, filename, pages.size());
+
+        // ── Event-Driven Cache Invalidation ──
+        // Xóa toàn bộ semantic cache sau khi upload thành công
+        // để đảm bảo cache không trả về context cũ (stale data).
+        // Fire-and-forget async — không block response upload.
+        semanticCacheService.ifPresent(cache ->
+                CompletableFuture.runAsync(cache::evictAllCache, virtualThreadExecutor));
     }
 
     public String searchSimilarity(String query) {

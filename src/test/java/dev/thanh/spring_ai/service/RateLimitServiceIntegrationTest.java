@@ -77,30 +77,40 @@ class RateLimitServiceIntegrationTest extends dev.thanh.spring_ai.config.Abstrac
     }
 
     // ─────────────────────────────────────────────────────────
-    // Layer 2: Daily Token Quota — Lua Script on Real Redis
+    // Layer 2: Daily Token Quota — Plain Redis commands
+    // checkDailyTokenQuota(userId) = pre-flight CHECK only
+    // consumeTokens(userId, tokens) = post-flight INCREMENT
     // ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("checkDailyTokenQuota — within limit — should allow")
-    void checkDailyTokenQuota_WhenWithinLimit_ShouldAllow() {
-        // Given: use a small number of tokens, well under daily limit
-        assertThatCode(() -> rateLimitService.checkDailyTokenQuota(userId, 100))
+    @DisplayName("checkDailyTokenQuota — no usage yet — should allow")
+    void checkDailyTokenQuota_WhenNoUsage_ShouldAllow() {
+        // When / Then: no tokens consumed yet → should pass
+        assertThatCode(() -> rateLimitService.checkDailyTokenQuota(userId))
                 .doesNotThrowAnyException();
     }
 
     @Test
-    @DisplayName("checkDailyTokenQuota — when accumulated > daily limit — should throw")
+    @DisplayName("checkDailyTokenQuota — within limit after consumeTokens — should allow")
+    void checkDailyTokenQuota_WhenWithinLimit_ShouldAllow() {
+        // Given: consume a small amount, well under daily limit
+        rateLimitService.consumeTokens(userId, 100);
+
+        // When / Then: check should still pass
+        assertThatCode(() -> rateLimitService.checkDailyTokenQuota(userId))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("checkDailyTokenQuota — when accumulated >= daily limit — should throw")
     void checkDailyTokenQuota_WhenExceedLimit_ShouldThrow() {
-        // Given: inject a custom service config by calling with tokens = limit + 1
-        // Use default limit (100000) by calling with a huge token count
         long dailyLimit = rateLimitProperties.getDailyTokenLimit();
 
-        // First call: consume all quota
-        assertThatCode(() -> rateLimitService.checkDailyTokenQuota(userId, (int) dailyLimit))
-                .doesNotThrowAnyException();
+        // Given: consume all quota via post-flight
+        rateLimitService.consumeTokens(userId, (int) dailyLimit);
 
-        // When: second call exceeds quota
-        assertThatThrownBy(() -> rateLimitService.checkDailyTokenQuota(userId, 1))
+        // When: pre-flight check should now reject
+        assertThatThrownBy(() -> rateLimitService.checkDailyTokenQuota(userId))
                 .isInstanceOf(RateLimitException.class)
                 .satisfies(ex -> {
                     RateLimitException rle = (RateLimitException) ex;
@@ -110,14 +120,13 @@ class RateLimitServiceIntegrationTest extends dev.thanh.spring_ai.config.Abstrac
     }
 
     @Test
-    @DisplayName("checkDailyTokenQuota — Redis TTL set to 25h")
-    void checkDailyTokenQuota_WhenFirstCall_ShouldSetTtlTo25Hours() {
-        // Given
-        rateLimitService.checkDailyTokenQuota(userId, 10);
+    @DisplayName("consumeTokens — first call — should set TTL ~25h on daily key")
+    void consumeTokens_WhenFirstCall_ShouldSetTtlTo25Hours() {
+        // Given: first consume creates the daily key
+        rateLimitService.consumeTokens(userId, 10);
 
         // Then: verify the key exists in Redis with a TTL
         String keyPattern = "rate_limit:tokens:daily:" + userId + ":*";
-        // Look up the key by pattern
         var keys = redisTemplate.keys(keyPattern);
         assertThat(keys).isNotEmpty();
 

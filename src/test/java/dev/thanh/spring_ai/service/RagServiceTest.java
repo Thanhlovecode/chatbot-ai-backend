@@ -60,7 +60,12 @@ class RagServiceTest {
     void setUp() {
         HybridRagProperties props = new HybridRagProperties();
         // default: candidateTopK=20, candidateSimilarityThreshold=0.3, rerankTopK=5
-        ragService = new RagService(documentVectorStore, documentSplitter, props, uuidGenerator, documentParserService, queryVectorStore, rerankService);
+        // semanticCacheService = Optional.empty() → cache disabled trong test
+        // virtualThreadExecutor = Runnable::run → synchronous execution trong test
+        ragService = new RagService(
+                documentVectorStore, documentSplitter, props, uuidGenerator,
+                documentParserService, java.util.Optional.empty(), (Runnable::run),
+                queryVectorStore, rerankService);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

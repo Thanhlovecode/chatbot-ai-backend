@@ -18,6 +18,7 @@ import dev.thanh.spring_ai.tools.JavaKnowledgeTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.model.ChatResponse;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -32,8 +33,11 @@ import reactor.util.retry.Retry;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 @Slf4j
@@ -42,12 +46,23 @@ public class LlmService implements LlmServicePort {
 
     private static final String RESILIENCE_NAME = "llm-gemini";
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Metric name constants — tránh typo, dễ refactor
+    // ─────────────────────────────────────────────────────────────────────────
+    private static final class Metrics {
+        static final String STREAM_STATUS = "llm.stream.status";
+        static final String STREAM_TTFB = "llm.stream.ttfb";
+        static final String TOKEN_USAGE = "llm.token.usage";
+    }
+
     private final ChatClient chatClient;
     private final CircuitBreaker circuitBreaker;
     private final RateLimiter rateLimiter;
     private final Bulkhead bulkhead;
     private final MeterRegistry meterRegistry;
     private final JavaKnowledgeTools knowledgeTool;
+    private final RateLimitService rateLimitService;
+    private final Executor virtualThreadExecutor;
 
     @Value("classpath:prompts/agentic-system-prompt.st")
     private Resource agenticSystemPrompt;
@@ -57,13 +72,17 @@ public class LlmService implements LlmServicePort {
             RateLimiterRegistry rateLimiterRegistry,
             BulkheadRegistry bulkheadRegistry,
             MeterRegistry meterRegistry,
-            JavaKnowledgeTools knowledgeTool) {
+            JavaKnowledgeTools knowledgeTool,
+            RateLimitService rateLimitService,
+            Executor virtualThreadExecutor) {
         this.chatClient = chatClient;
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_NAME);
         this.rateLimiter = rateLimiterRegistry.rateLimiter(RESILIENCE_NAME);
         this.bulkhead = bulkheadRegistry.bulkhead(RESILIENCE_NAME);
         this.meterRegistry = meterRegistry;
         this.knowledgeTool = knowledgeTool;
+        this.rateLimitService = rateLimitService;
+        this.virtualThreadExecutor = virtualThreadExecutor;
         log.info("LlmService initialized — Agentic RAG mode | CB: {}, RL: limitForPeriod={}, BH: maxConcurrent={}",
                 RESILIENCE_NAME,
                 rateLimiter.getRateLimiterConfig().getLimitForPeriod(),
@@ -72,18 +91,22 @@ public class LlmService implements LlmServicePort {
 
     // ═══════════════════════════════════════════════════════════════════════
     // streamResponse — Main chat stream với full Resilience4j stack
+    // Nội bộ dùng .chatResponse() để capture usage metadata từ Gemini,
+    // map về Flux<String> giữ nguyên contract cũ.
     // ═══════════════════════════════════════════════════════════════════════
 
     @Override
-    public Flux<String> streamResponse(String userMsg, List<Message> history) {
+    public Flux<String> streamResponse(String userMsg, List<Message> history, String userId) {
         log.info("Requesting Gemini stream (Agentic RAG). UserMsg length: {}", userMsg.length());
 
         AtomicBoolean hasEmittedData = new AtomicBoolean(false);
         AtomicBoolean ttfbStopped = new AtomicBoolean(false);
 
+        // Capture actual token usage từ Gemini metadata (chunk cuối)
+        AtomicInteger actualTotalTokens = new AtomicInteger(0);
+
         // Đo TTFB (Time To First Byte) — từ lúc gọi method → token đầu tiên
-        // Bao gồm thời gian xếp hàng RL/BH + tool execution → phản ánh TTFB thực từ góc
-        // user
+        // Bao gồm thời gian xếp hàng RL/BH + tool execution → phản ánh TTFB thực từ góc user
         Timer.Sample ttfbTimer = Timer.start(meterRegistry);
 
         return chatClient.prompt()
@@ -92,24 +115,41 @@ public class LlmService implements LlmServicePort {
                 .user(userMsg)
                 .tools(knowledgeTool) // Agentic RAG — Gemini tự quyết định khi nào gọi tool
                 .stream()
-                .content()
+                .chatResponse() // Dùng chatResponse() thay vì content() để capture usage metadata
                 .doOnSubscribe(s -> log.info("Gemini stream subscribed (tools: JavaKnowledgeTools)"))
 
-                // ── Đánh dấu đã emit data + ghi TTFB metric ──
-                .doOnNext(token -> {
-                    if (hasEmittedData.compareAndSet(false, true)) {
-                        if (ttfbStopped.compareAndSet(false, true)) {
-                            ttfbTimer.stop(meterRegistry.timer("llm.stream.ttfb"));
+                // ── Capture usage metadata + đánh dấu TTFB ──
+                .doOnNext(response -> {
+                    // 1. Capture usage metadata (thường chỉ có ở chunk cuối)
+                    if (response.getMetadata() != null
+                            && response.getMetadata().getUsage() != null) {
+                        Integer total = response.getMetadata().getUsage().getTotalTokens();
+                        if (total != null && total > 0) {
+                            actualTotalTokens.set(total);
                         }
-                        log.debug("First token received. Retry disabled from this point.");
+                    }
+
+                    // 2. Detect first meaningful token → stop TTFB timer
+                    String content = extractText(response);
+                    if (content != null && !content.isEmpty()) {
+                        if (hasEmittedData.compareAndSet(false, true)) {
+                            if (ttfbStopped.compareAndSet(false, true)) {
+                                ttfbTimer.stop(meterRegistry.timer(Metrics.STREAM_TTFB));
+                            }
+                            log.debug("First token received. Retry disabled from this point.");
+                        }
                     }
                 })
+
+                // ── Map ChatResponse → String (giữ nguyên contract Flux<String>) ──
+                .map(this::extractContent)
+                .filter(s -> !s.isEmpty())
 
                 // Buffer 256 tokens để chịu được downstream SSE client chậm (backpressure)
                 .onBackpressureBuffer(256)
 
                 // ── TIMEOUT 2 PHA ──────────────────────────────────────
-                // Phase 1: Đợi tối đa 30s cho token đầu tiên (Gemini cold start / thinking)
+                // Phase 1: Đợi tối đa 60s cho token đầu tiên (Gemini cold start / thinking)
                 // Phase 2: Từ token thứ 2 trở đi, chỉ cho phép idle tối đa 5s giữa các token
                 .timeout(Mono.delay(Duration.ofSeconds(60)), v -> Mono.delay(Duration.ofSeconds(5)))
 
@@ -117,8 +157,8 @@ public class LlmService implements LlmServicePort {
                 // Thứ tự subscribe (ngoài → trong): RL → BH → CB → stream
                 // CB trong cùng → chỉ đếm failure từ Gemini, KHÔNG bị RL/BH rejection nhiễu
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker)) // Trong: failure detection
-                .transformDeferred(BulkheadOperator.of(bulkhead)) // Giữa: concurrent limit
-                .transformDeferred(RateLimiterOperator.of(rateLimiter)) // Ngoài: RPM throttle
+                .transformDeferred(BulkheadOperator.of(bulkhead))             // Giữa: concurrent limit
+                .transformDeferred(RateLimiterOperator.of(rateLimiter))        // Ngoài: RPM throttle
 
                 // ── RETRY: ngoài RL — mỗi attempt đi lại qua RL→BH→CB ──
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(500))
@@ -127,14 +167,28 @@ public class LlmService implements LlmServicePort {
                         .onRetryExhaustedThrow((spec, signal) -> signal.failure()))
 
                 // ── Metrics: phân loại kết quả stream ──
-                .doOnComplete(() -> meterRegistry.counter("llm.stream.status", "result", "success").increment())
-                .doOnError(e -> meterRegistry.counter("llm.stream.status", "result", "error",
+                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "success").increment())
+                .doOnError(e -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "error",
                         "type", e.getClass().getSimpleName()).increment())
 
-                // ── Fallback: stop TTFB timer nếu stream kết thúc mà chưa có token nào ──
+                // ── Post-flight: consume quota + stop TTFB fallback ──
                 .doFinally(signal -> {
+                    int totalTokens = actualTotalTokens.get();
+
+                    if (totalTokens > 0) {
+                        // Fire-and-forget trên virtual thread — không block stream pipeline
+                        CompletableFuture.runAsync(() -> {
+                            rateLimitService.consumeTokens(userId, totalTokens);
+                            meterRegistry.summary(Metrics.TOKEN_USAGE).record(totalTokens);
+                            log.info("Post-flight quota: {} total tokens consumed for user={}", totalTokens, userId);
+                        }, virtualThreadExecutor);
+                    } else {
+                        log.warn("No token usage metadata received from Gemini — quota not updated");
+                    }
+
+                    // Fallback TTFB timer nếu stream kết thúc mà chưa có token nào
                     if (ttfbStopped.compareAndSet(false, true)) {
-                        ttfbTimer.stop(meterRegistry.timer("llm.stream.ttfb",
+                        ttfbTimer.stop(meterRegistry.timer(Metrics.STREAM_TTFB,
                                 "status", "no_token"));
                     }
                 })
@@ -177,6 +231,30 @@ public class LlmService implements LlmServicePort {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // extractText / extractContent — DRY: logic trích xuất text duy nhất
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Trích xuất text content từ ChatResponse.
+     * Dùng chung cho cả doOnNext (TTFB detection) lẫn map (emit content).
+     */
+    private String extractText(ChatResponse response) {
+        if (response.getResult() == null || response.getResult().getOutput() == null) {
+            return null;
+        }
+        return response.getResult().getOutput().getText();
+    }
+
+    /**
+     * Map ChatResponse → String content (giữ nguyên contract Flux<String>).
+     * Trả "" cho null/empty để filter bên ngoài loại bỏ.
+     */
+    private String extractContent(ChatResponse response) {
+        String text = extractText(response);
+        return text != null ? text : "";
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // isSafeToRetry — Whitelist nghiêm ngặt
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -190,8 +268,8 @@ public class LlmService implements LlmServicePort {
      * </ul>
      * CHỈ retry nếu:
      * <ul>
-     * <li>{@link TimeoutException} — Gemini idle quá 10s</li>
-     * <li>{@link IOException} — network failure</li>
+     * <li>{@link TimeoutException} — Gemini idle quá lâu</li>
+     * <li>{@link IOException} — network failure (bao gồm ConnectException)</li>
      * </ul>
      */
     private boolean isSafeToRetry(Throwable e, boolean hasEmitted) {
@@ -206,14 +284,13 @@ public class LlmService implements LlmServicePort {
             return false;
         }
 
-        // 🔍 BÓC LỚP VỎ ĐỂ LẤY EXCEPTION GỐC (ROOT CAUSE) TỪ SPRING
+        // Bóc lớp wrapper để lấy root cause thực sự từ Spring
         Throwable rootCause = NestedExceptionUtils.getRootCause(e);
         Throwable actualError = (rootCause != null) ? rootCause : e;
 
-        // Bắt lỗi TCP Timeout hoặc mất kết nối mạng thật sự
+        // ConnectException extends IOException → chỉ cần check IOException
         return actualError instanceof TimeoutException
-                || actualError instanceof IOException
-                || actualError instanceof java.net.ConnectException;
+                || actualError instanceof IOException;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -223,6 +300,8 @@ public class LlmService implements LlmServicePort {
     /**
      * Xử lý lỗi cuối cùng sau khi retry exhausted.
      * Phân loại exception để trả message phù hợp cho client.
+     * <p>
+     * KHÔNG lộ e.getMessage() ra client — chỉ log server-side.
      *
      * @param e          exception cuối cùng
      * @param hasEmitted true nếu đã gửi ít nhất 1 token lên client
@@ -250,7 +329,8 @@ public class LlmService implements LlmServicePort {
             return Flux.just("Hệ thống đang bận xử lý nhiều yêu cầu, vui lòng thử lại sau.");
         }
 
+        // Log chi tiết server-side nhưng KHÔNG lộ e.getMessage() ra client
         log.error("LlmService terminal error: ", e);
-        return Flux.just("Xin lỗi, hệ thống AI gặp lỗi kết nối: " + e.getMessage());
+        return Flux.just("Xin lỗi, hệ thống AI gặp sự cố. Vui lòng thử lại sau.");
     }
 }

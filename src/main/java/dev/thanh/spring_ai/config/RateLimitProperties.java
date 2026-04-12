@@ -34,5 +34,5 @@ public class RateLimitProperties {
      * Maximum input tokens allowed per user per day.
      * Default: 100,000 tokens ≈ 50-70 conversations.
      */
-    private long dailyTokenLimit = 100_000L;
+    private long dailyTokenLimit = 200_000L;
 }

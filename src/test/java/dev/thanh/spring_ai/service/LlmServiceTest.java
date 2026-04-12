@@ -18,12 +18,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
@@ -32,14 +34,14 @@ import java.net.ConnectException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for LlmService — covers both normal Gemini failure scenarios
@@ -57,6 +59,9 @@ class LlmServiceTest {
     @Mock
     private ChatClient chatClient;
 
+    @Mock
+    private RateLimitService rateLimitService;
+
     // Default registry (used by most tests — CB always CLOSED)
     private CircuitBreakerRegistry defaultRegistry;
 
@@ -67,11 +72,14 @@ class LlmServiceTest {
     private RateLimiterRegistry rateLimiterRegistry;
     private BulkheadRegistry bulkheadRegistry;
     private MeterRegistry meterRegistry;
+    private Executor virtualThreadExecutor;
 
     private LlmService llmService;
 
     @Mock
     private JavaKnowledgeTools knowledgeTool;
+
+    private static final String USER_ID = "test-user-123";
 
     @BeforeEach
     void setUp() {
@@ -79,6 +87,7 @@ class LlmServiceTest {
         rateLimiterRegistry = RateLimiterRegistry.ofDefaults();
         bulkheadRegistry = BulkheadRegistry.ofDefaults();
         meterRegistry = new SimpleMeterRegistry();
+        virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
         sensitiveRegistry = CircuitBreakerRegistry.of(
                 CircuitBreakerConfig.custom()
@@ -90,14 +99,37 @@ class LlmServiceTest {
                         .build()
         );
         // Use default registry by default — tests needing CB OPEN will override
-        llmService = new LlmService(chatClient, defaultRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry, knowledgeTool);
+        llmService = new LlmService(chatClient, defaultRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
     }
 
     // ─────────────────────────────────────────────────────────
     // Helper: mock ChatClient fluent chain for streamResponse
+    // Now uses .chatResponse() instead of .content()
     // ─────────────────────────────────────────────────────────
 
-    private void mockStreamResponse(Flux<String> flux) {
+    /**
+     * Build a ChatResponse chunk from text content (intermediate chunk — no usage).
+     */
+    private ChatResponse buildTextChunk(String text) {
+        AssistantMessage message = new AssistantMessage(text);
+        return new ChatResponse(List.of(new Generation(message)));
+    }
+
+    /**
+     * Build a ChatResponse chunk with usage metadata (final chunk).
+     */
+    private ChatResponse buildUsageChunk(String text, int totalTokens) {
+        AssistantMessage message = new AssistantMessage(text);
+        Usage usage = mock(Usage.class);
+        lenient().when(usage.getTotalTokens()).thenReturn(totalTokens);
+        ChatResponseMetadata metadata = ChatResponseMetadata.builder()
+                .usage(usage)
+                .build();
+        return new ChatResponse(List.of(new Generation(message)), metadata);
+    }
+
+    private void mockChatResponseStream(Flux<ChatResponse> flux) {
         ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec systemSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec messagesSpec = mock(ChatClient.ChatClientRequestSpec.class);
@@ -111,7 +143,7 @@ class LlmServiceTest {
         when(messagesSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.tools(any())).thenReturn(toolsSpec);
         when(toolsSpec.stream()).thenReturn(streamSpec);
-        when(streamSpec.content()).thenReturn(flux);
+        when(streamSpec.chatResponse()).thenReturn(flux);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -119,17 +151,41 @@ class LlmServiceTest {
     // ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("streamResponse — happy path — should emit all tokens")
+    @DisplayName("streamResponse — happy path — should emit all tokens as strings")
     void streamResponse_WhenSuccess_ShouldEmitTokens() {
-        // Given
-        mockStreamResponse(Flux.just("Hello", " World", "!"));
+        // Given: 2 text chunks + 1 final chunk with usage metadata
+        mockChatResponseStream(Flux.just(
+                buildTextChunk("Hello"),
+                buildTextChunk(" World"),
+                buildUsageChunk("!", 120)
+        ));
 
         // When & Then
-        StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList()))
+        StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList(), USER_ID))
                 .expectNext("Hello")
                 .expectNext(" World")
                 .expectNext("!")
                 .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("streamResponse — happy path — should consume tokens via rateLimitService after completion")
+    void streamResponse_WhenSuccess_ShouldConsumeTokensPostFlight() throws InterruptedException {
+        // Given: final chunk has 3,070 total tokens (simulating RAG scenario)
+        mockChatResponseStream(Flux.just(
+                buildTextChunk("Cần báo trước"),
+                buildUsageChunk(" 3 ngày.", 3070) // 3050 prompt (incl RAG) + 20 completion
+        ));
+
+        // When
+        StepVerifier.create(llmService.streamResponse("Tóm tắt quy định xin nghỉ phép", Collections.emptyList(), USER_ID))
+                .expectNext("Cần báo trước")
+                .expectNext(" 3 ngày.")
+                .verifyComplete();
+
+        // Then: verify consumeTokens called asynchronously (give virtual thread time to execute)
+        Thread.sleep(200);
+        verify(rateLimitService).consumeTokens(USER_ID, 3070);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -139,14 +195,13 @@ class LlmServiceTest {
     @Test
     @DisplayName("streamResponse — when timeout — should return fallback error message (not throw)")
     void streamResponse_WhenTimeout_ShouldReturnFallbackMessage() {
-        // Given: Flux.never() — không emit gì, để production timeout 2 pha tự fire (30s phase 1)
-        // Retry 2 lần × 30s + backoff → tổng ~95s. Advance virtual time 120s để an toàn.
-        mockStreamResponse(Flux.never());
+        // Given: simulate timeout by emitting a TimeoutException directly.
+        // Note: Resilience4j operators use real Schedulers, incompatible with StepVerifier.withVirtualTime().
+        // Instead, we test the error handling path that timeout would trigger.
+        mockChatResponseStream(Flux.error(new java.util.concurrent.TimeoutException("Gemini idle > 60s")));
 
         // When & Then: onErrorResume should catch timeout and emit a single error message
-        StepVerifier.withVirtualTime(() ->
-                        llmService.streamResponse("query", Collections.emptyList()))
-                .thenAwait(Duration.ofSeconds(120))
+        StepVerifier.create(llmService.streamResponse("query", Collections.emptyList(), USER_ID))
                 .assertNext(msg -> assertThat(msg).containsAnyOf("lỗi", "Xin lỗi"))
                 .verifyComplete();
     }
@@ -159,10 +214,10 @@ class LlmServiceTest {
     @DisplayName("streamResponse — when Gemini returns error — should emit fallback message (not propagate)")
     void streamResponse_WhenGeminiError_ShouldReturnFallbackMessage() {
         // Given: simulate Gemini API failure
-        mockStreamResponse(Flux.error(new RuntimeException("500 Internal Server Error from Gemini")));
+        mockChatResponseStream(Flux.error(new RuntimeException("500 Internal Server Error from Gemini")));
 
         // When & Then: onErrorResume returns a single fallback string, no exception propagated
-        StepVerifier.create(llmService.streamResponse("question", Collections.emptyList()))
+        StepVerifier.create(llmService.streamResponse("question", Collections.emptyList(), USER_ID))
                 .assertNext(msg -> {
                     assertThat(msg).containsAnyOf("lỗi", "Xin lỗi");
                 })
@@ -177,20 +232,18 @@ class LlmServiceTest {
     @DisplayName("streamResponse — when CB is OPEN — should fail-fast with unavailable message (no 60s wait)")
     void streamResponse_WhenCircuitBreakerOpen_ShouldFailFast() {
         // Given: use sensitive registry, force CB into OPEN state
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry, knowledgeTool);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
 
         // Manually transition to OPEN
         cb.transitionToOpenState();
         assertThat(cb.getState()).isEqualTo(CircuitBreaker.State.OPEN);
 
-        // Note: CircuitBreakerOperator intercepts at subscribe time — Reactor still builds the chain eagerly,
-        // so we need to mock the ChatClient chain. We use Flux.never() as the upstream source;
-        // the CB will reject subscription before any item is emitted. 
-        mockStreamResponse(Flux.never());
+        mockChatResponseStream(Flux.never());
 
         // When & Then: CallNotPermittedException → fail-fast message (no timeout wait)
-        StepVerifier.create(serviceWithSensitiveCB.streamResponse("question", Collections.emptyList()))
+        StepVerifier.create(serviceWithSensitiveCB.streamResponse("question", Collections.emptyList(), USER_ID))
                 .assertNext(msg -> assertThat(msg).contains("tạm thời không khả dụng"))
                 .verifyComplete();
     }
@@ -199,12 +252,13 @@ class LlmServiceTest {
     @DisplayName("streamResponse — after enough failures — CB should OPEN and subsequent calls fail-fast")
     void streamResponse_AfterFailures_CircuitShouldOpen_AndSubsequentCallsFailFast() {
         // Given: sensitive registry (1 failure = OPEN)
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry, knowledgeTool);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
 
         // First call: mock Gemini error — this triggers CB to OPEN (1 failure = 100% rate)
-        mockStreamResponse(Flux.error(new RuntimeException("Gemini 503 Service Unavailable")));
-        StepVerifier.create(serviceWithSensitiveCB.streamResponse("first", Collections.emptyList()))
+        mockChatResponseStream(Flux.error(new RuntimeException("Gemini 503 Service Unavailable")));
+        StepVerifier.create(serviceWithSensitiveCB.streamResponse("first", Collections.emptyList(), USER_ID))
                 .assertNext(msg -> assertThat(msg).containsAnyOf("lỗi", "Xin lỗi"))
                 .verifyComplete();
 
@@ -212,7 +266,7 @@ class LlmServiceTest {
         assertThat(cb.getState()).isEqualTo(CircuitBreaker.State.OPEN);
 
         // Second call: CB OPEN → fail-fast without calling Gemini at all
-        StepVerifier.create(serviceWithSensitiveCB.streamResponse("second", Collections.emptyList()))
+        StepVerifier.create(serviceWithSensitiveCB.streamResponse("second", Collections.emptyList(), USER_ID))
                 .assertNext(msg -> assertThat(msg).contains("tạm thời không khả dụng"))
                 .verifyComplete();
     }
@@ -221,7 +275,8 @@ class LlmServiceTest {
     @DisplayName("generateTitle — when CB is OPEN — should return Mono.empty (silent fallback)")
     void generateTitle_WhenCircuitBreakerOpen_ShouldReturnEmpty() {
         // Given: force CB into OPEN state
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry, knowledgeTool);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
         cb.transitionToOpenState();
 
@@ -237,15 +292,13 @@ class LlmServiceTest {
     @Test
     @DisplayName("generateTitle — happy path — should return trimmed title")
     void generateTitle_WhenSuccess_ShouldReturnTrimmedTitle() {
-        // Given: mock the fluent chain: prompt() → options() → user() → call() → content()
+        // Given: mock the fluent chain: prompt() → user() → call() → content()
         ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
-        ChatClient.ChatClientRequestSpec optionsSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
 
         when(chatClient.prompt()).thenReturn(requestSpec);
-        when(requestSpec.options(any())).thenReturn(optionsSpec);
-        when(optionsSpec.user(anyString())).thenReturn(userSpec);
+        when(requestSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenReturn("  My First Chat  ");
 
@@ -258,15 +311,13 @@ class LlmServiceTest {
     @Test
     @DisplayName("generateTitle — when Gemini fails — should return Mono.empty (silent fallback)")
     void generateTitle_WhenFails_ShouldReturnEmpty() {
-        // Given: mock the fluent chain: prompt() → options() → user() → call() → content()
+        // Given: mock the fluent chain: prompt() → user() → call() → content()
         ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
-        ChatClient.ChatClientRequestSpec optionsSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
 
         when(chatClient.prompt()).thenReturn(requestSpec);
-        when(requestSpec.options(any())).thenReturn(optionsSpec);
-        when(optionsSpec.user(anyString())).thenReturn(userSpec);
+        when(requestSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenThrow(new RuntimeException("Gemini 429"));
 
@@ -364,8 +415,9 @@ class LlmServiceTest {
         }
 
         @Test
-        @DisplayName("ConnectException — should retry (TCP connection refused)")
+        @DisplayName("ConnectException — should retry (extends IOException)")
         void connectException_ShouldRetry() {
+            // ConnectException extends IOException → covered by IOException check
             assertThat(invokeIsSafeToRetry(new ConnectException("Connection refused"), false)).isTrue();
         }
 
@@ -415,14 +467,14 @@ class LlmServiceTest {
         @Test
         @DisplayName("when stream emits tokens then errors — should emit error suffix, no retry text repeat")
         void midStreamError_ShouldEmitErrorSuffix() {
-            // Given: emit 2 tokens, then error — simulates Gemini stream cutting mid-response
-            mockStreamResponse(Flux.concat(
-                    Flux.just("Hello", " World"),
+            // Given: emit 2 text chunks, then error — simulates Gemini stream cutting mid-response
+            mockChatResponseStream(Flux.concat(
+                    Flux.just(buildTextChunk("Hello"), buildTextChunk(" World")),
                     Flux.error(new IOException("Connection reset mid-stream"))
             ));
 
             // When & Then
-            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList()))
+            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList(), USER_ID))
                     .expectNext("Hello")
                     .expectNext(" World")
                     // After emitting data, the error is caught and a suffix is appended
@@ -450,15 +502,16 @@ class LlmServiceTest {
                             .timeoutDuration(Duration.ZERO) // fail immediately
                             .build()
             );
-            LlmService strictService = new LlmService(chatClient, defaultRegistry, strictRL, bulkheadRegistry, meterRegistry, knowledgeTool);
+            LlmService strictService = new LlmService(chatClient, defaultRegistry, strictRL,
+                    bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
 
             // Exhaust the single permit
             io.github.resilience4j.ratelimiter.RateLimiter rl = strictRL.rateLimiter("llm-gemini");
             rl.acquirePermission(); // consume the only permit
 
-            mockStreamResponse(Flux.just("should-not-reach"));
+            mockChatResponseStream(Flux.just(buildTextChunk("should-not-reach")));
 
-            StepVerifier.create(strictService.streamResponse("Hi", Collections.emptyList()))
+            StepVerifier.create(strictService.streamResponse("Hi", Collections.emptyList(), USER_ID))
                     .assertNext(msg -> assertThat(msg).contains("quá tải"))
                     .verifyComplete();
         }
@@ -475,22 +528,27 @@ class LlmServiceTest {
         @Test
         @DisplayName("when CB OPEN — should return 'tạm thời không khả dụng'")
         void cbOpen_ShouldReturnUnavailableMessage() {
-            LlmService service = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry, bulkheadRegistry, meterRegistry, knowledgeTool);
+            LlmService service = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
+                    bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
             sensitiveRegistry.circuitBreaker("llm-gemini").transitionToOpenState();
-            mockStreamResponse(Flux.never());
+            mockChatResponseStream(Flux.never());
 
-            StepVerifier.create(service.streamResponse("q", Collections.emptyList()))
+            StepVerifier.create(service.streamResponse("q", Collections.emptyList(), USER_ID))
                     .assertNext(msg -> assertThat(msg).contains("tạm thời không khả dụng"))
                     .verifyComplete();
         }
 
         @Test
-        @DisplayName("when generic error — should include error message in response")
-        void genericError_ShouldIncludeMessage() {
-            mockStreamResponse(Flux.error(new RuntimeException("Unexpected API error")));
+        @DisplayName("when generic error — should return safe message (no internal details leaked)")
+        void genericError_ShouldReturnSafeMessage() {
+            mockChatResponseStream(Flux.error(new RuntimeException("Unexpected API error")));
 
-            StepVerifier.create(llmService.streamResponse("q", Collections.emptyList()))
-                    .assertNext(msg -> assertThat(msg).contains("Unexpected API error"))
+            StepVerifier.create(llmService.streamResponse("q", Collections.emptyList(), USER_ID))
+                    .assertNext(msg -> {
+                        assertThat(msg).contains("sự cố");
+                        // SECURITY: internal error message must NOT be exposed to client
+                        assertThat(msg).doesNotContain("Unexpected API error");
+                    })
                     .verifyComplete();
         }
     }
@@ -506,9 +564,9 @@ class LlmServiceTest {
         @Test
         @DisplayName("successful stream — should increment success counter")
         void successfulStream_ShouldIncrementSuccessCounter() {
-            mockStreamResponse(Flux.just("token1", "token2"));
+            mockChatResponseStream(Flux.just(buildTextChunk("token1"), buildTextChunk("token2")));
 
-            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList()))
+            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList(), USER_ID))
                     .expectNextCount(2)
                     .verifyComplete();
 
@@ -520,15 +578,36 @@ class LlmServiceTest {
         @Test
         @DisplayName("TTFB timer — should record on first token")
         void ttfbTimer_ShouldRecordOnFirstToken() {
-            mockStreamResponse(Flux.just("first-token"));
+            mockChatResponseStream(Flux.just(buildTextChunk("first-token")));
 
-            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList()))
+            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList(), USER_ID))
                     .expectNext("first-token")
                     .verifyComplete();
 
             var timer = meterRegistry.find("llm.stream.ttfb").timer();
             assertThat(timer).isNotNull();
             assertThat(timer.count()).isGreaterThanOrEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("token usage metric — should record totalTokens from Gemini metadata")
+        void tokenUsageMetric_ShouldRecordFromMetadata() throws InterruptedException {
+            mockChatResponseStream(Flux.just(
+                    buildTextChunk("Hello"),
+                    buildUsageChunk("!", 550)
+            ));
+
+            StepVerifier.create(llmService.streamResponse("Hi", Collections.emptyList(), USER_ID))
+                    .expectNextCount(2)
+                    .verifyComplete();
+
+            // Wait for async virtual thread to complete
+            Thread.sleep(200);
+
+            var summary = meterRegistry.find("llm.token.usage").summary();
+            assertThat(summary).isNotNull();
+            assertThat(summary.count()).isEqualTo(1);
+            assertThat(summary.totalAmount()).isEqualTo(550.0);
         }
     }
 }

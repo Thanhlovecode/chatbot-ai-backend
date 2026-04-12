@@ -29,7 +29,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * BLOCKER 3 Fix: ChatService unit tests using StepVerifier for Flux verification.
+ * ChatService unit tests using StepVerifier for Flux verification.
  * ChatService is the highest-risk component orchestrating Gemini, RAG, Rate Limiting, Redis.
  */
 @ExtendWith(MockitoExtension.class)
@@ -41,7 +41,6 @@ class ChatServiceTest {
     @Mock private UuidV7Generator uuidV7Generator;
     @Mock private ChatSessionService chatSessionService;
     @Mock private SessionActivityService sessionActivityService;
-    @Mock private TokenCounterService tokenCounterService;
     @Mock private RateLimitService rateLimitService;
     @Mock private ChatMetricsService chatMetrics;
 
@@ -94,9 +93,8 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(SESSION_ID, USER_ID)).thenReturn(SESSION_ID);
         when(chatSessionService.prepareHistory(anyString(), anyBoolean())).thenReturn(List.of());
-        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(500);
         doThrow(new RateLimitException(RateLimitErrorCode.DAILY_TOKEN_LIMIT_EXCEEDED, 10000L, 10000L))
-                .when(rateLimitService).checkDailyTokenQuota(USER_ID, 500);
+                .when(rateLimitService).checkDailyTokenQuota(USER_ID);
 
         ChatMessageRequest request = new ChatMessageRequest("Hello", SESSION_ID);
 
@@ -121,9 +119,8 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(SESSION_ID, USER_ID)).thenReturn(SESSION_ID);
         when(chatSessionService.prepareHistory(anyString(), eq(false))).thenReturn(List.of());
-        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(100);
-        doNothing().when(rateLimitService).checkDailyTokenQuota(anyString(), anyInt());
-        when(llmService.streamResponse(anyString(), anyList()))
+        doNothing().when(rateLimitService).checkDailyTokenQuota(anyString());
+        when(llmService.streamResponse(anyString(), anyList(), anyString()))
                 .thenReturn(Flux.just("Hello ", "World"));
         doNothing().when(redisStreamService).pushToStream(any());
 
@@ -154,9 +151,8 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(null, USER_ID)).thenReturn(newSessionId);
         when(chatSessionService.prepareHistory(anyString(), eq(true))).thenReturn(List.of());
-        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(50);
-        doNothing().when(rateLimitService).checkDailyTokenQuota(anyString(), anyInt());
-        when(llmService.streamResponse(anyString(), anyList()))
+        doNothing().when(rateLimitService).checkDailyTokenQuota(anyString());
+        when(llmService.streamResponse(anyString(), anyList(), anyString()))
                 .thenReturn(Flux.just("Hello"));
         when(llmService.generateTitle(anyString()))
                 .thenReturn(Mono.just("My First Chat Title"));
@@ -187,9 +183,8 @@ class ChatServiceTest {
         doNothing().when(rateLimitService).checkTokenBucket(USER_ID);
         when(chatSessionService.getOrCreateSession(SESSION_ID, USER_ID)).thenReturn(SESSION_ID);
         when(chatSessionService.prepareHistory(anyString(), anyBoolean())).thenReturn(List.of());
-        when(tokenCounterService.countInputTokens(any(), any())).thenReturn(100);
-        doNothing().when(rateLimitService).checkDailyTokenQuota(anyString(), anyInt());
-        when(llmService.streamResponse(anyString(), anyList()))
+        doNothing().when(rateLimitService).checkDailyTokenQuota(anyString());
+        when(llmService.streamResponse(anyString(), anyList(), anyString()))
                 .thenReturn(Flux.error(new RuntimeException("LLM connection failed")));
         doNothing().when(redisStreamService).pushToStream(any());
 

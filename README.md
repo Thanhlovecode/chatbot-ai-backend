@@ -1,6 +1,6 @@
 # 🤖 AI Chatbot — Backend
 
-> **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng **Agentic RAG** (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
+> **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng **Agentic RAG** (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, **Semantic Cache** (Redis HNSW + local MiniLM embedding), và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
 
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
@@ -29,8 +29,8 @@
                     │  │  Resilience (CB + RateLimiter + Bulkhead)         │  │
                     │  │  Redis Streams (Consumer Group + DLQ + Recovery)  │  │
                     │  │  Session Activity (ZSET + Background Sync)        │  │
-                    │  │  Rate Limit (Token Bucket + Daily Quota via Lua)  │  │
-                    │  │  Token Counter (JTokkit cl100k_base)              │  │
+                    │  │  Rate Limit (Token Bucket + Post-flight Quota)     │  │
+                    │  │  Semantic Cache (Redis HNSW + MiniLM-L6-v2 local) │  │
                     │  │  Observability (Micrometer → Prometheus)          │  │
                     │  └────┬──────────┬──────────┬──────────┬────────────┘  │
                     └───────┼──────────┼──────────┼──────────┼──────────────┘
@@ -62,15 +62,16 @@
 | **Embedding** | Gemini Embedding 001 (Matryoshka 768d) | Dual task-type embeddings (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY) |
 | **Vector DB** | Qdrant 1.13 | Semantic search & RAG retrieval |
 | **Reranking** | Cohere Rerank v3.5 | Cross-encoder reranking (improve RAG quality) |
+| **Local Embedding** | LangChain4j MiniLM-L6-v2-Q (ONNX) | 384-dim local embeddings for semantic cache (~1ms, zero API cost) |
 | **Database** | PostgreSQL 16 | Persistent storage (Flyway migrations) |
-| **Cache/Stream** | Redis 8 | Caching, Streams, ZSET session tracking, Lua rate limiting |
+| **Cache/Stream** | Redis 8 (RediSearch) | Caching, Streams, ZSET session tracking, Lua rate limiting, HNSW vector search |
 | **Migration** | Flyway | Database schema versioning (table + index migrations) |
 | **Resilience** | Resilience4j 2.3 | Circuit Breaker, RateLimiter, Bulkhead (LLM + Redis) |
 | **Security** | Spring Security + JWT RS256 | Stateless authentication & RBAC authorization |
 | **Auth** | Google OAuth2 | Social login (ID token verification) |
 | **Doc Parser** | Apache Tika + Spring AI PDF Reader | Multi-format document ingestion (PDF, DOCX, TXT, HTML, ODT) |
 | **Text Splitting** | LangChain4j `DocumentSplitters.recursive()` | Recursive character-based chunking |
-| **Token Counting** | JTokkit (cl100k_base) | Pre-flight token estimation for daily quota |
+| **Redis Client** | Jedis 6.x | FT.CREATE / FT.SEARCH for semantic cache (alongside Lettuce) |
 | **Observability** | Micrometer + Prometheus + Grafana | Custom metrics, dashboards, alerting |
 | **Load Testing** | k6 | Stress testing & concurrency benchmarks |
 | **ID Generation** | UUIDv7 (uuid-creator) | Time-ordered sortable unique IDs |
@@ -83,8 +84,10 @@
 ### 🧠 Agentic RAG Pipeline
 
 - **Agentic approach**: LLM (Gemini) tự quyết định khi nào cần tra cứu knowledge base thông qua **Tool Calling** — thay vì naive RAG (mọi câu hỏi đều qua Qdrant)
-- **3-stage retrieval** (khi tool được gọi): Vector Search (Qdrant) → Cross-Encoder Rerank (Cohere) → Context Assembly
-- **Tool resilience**: Timeout 10s + graceful fallback — nếu Qdrant down/chậm, LLM vẫn trả lời bằng general knowledge
+- **Semantic Cache layer**: Redis HNSW + MiniLM-L6-v2 local embedding (384-dim, ~1ms). Cache hit → ~10ms thay vì ~2-5s (skip Qdrant + Cohere hoàn toàn)
+- **3-stage retrieval** (khi cache miss + tool được gọi): Vector Search (Qdrant) → Cross-Encoder Rerank (Cohere) → Context Assembly
+- **Event-driven cache invalidation**: Upload tài liệu mới → tự động evict toàn bộ semantic cache (FT.DROPINDEX DD + re-create)
+- **Tool resilience**: Timeout 10s + graceful fallback — nếu Qdrant down/chậm, LLM vẫn trả lời bằng general knowledge. Cache failure cũng fail-open
 - **Dual VectorStore architecture**: Separate `RETRIEVAL_DOCUMENT` embeddings for indexing and `RETRIEVAL_QUERY` embeddings for search — follows Gemini's recommended task-type separation
 - **Matryoshka embedding**: `gemini-embedding-001` giảm từ 3072d → 768d, tiết kiệm 4x RAM Qdrant với ~95% chất lượng retrieval
 - **Smart document parser**: PDF → page-level reader (PagePdfDocumentReader), non-PDF → Apache Tika auto-detect
@@ -116,7 +119,10 @@
 ### 🔒 Rate Limiting (2 Layer)
 
 - **Layer 1 — Token Bucket** (anti-spam): Redis Lua script, atomic refill + consume, configurable capacity & refill rate
-- **Layer 2 — Daily Token Quota**: Redis Lua script, JTokkit pre-flight token counting, 25h TTL (midnight edge-case buffer)
+- **Layer 2 — Daily Token Quota** (post-flight):
+  - **Pre-flight check**: Chỉ kiểm tra xem user đã vượt quota chưa (Redis GET) — không increment
+  - **Post-flight consume**: Sau khi stream xong, cộng `totalTokens` thực tế từ **Gemini response metadata** (bao gồm prompt + RAG context + output tokens) — mapping 1:1 với billing Gemini API
+  - Fire-and-forget trên virtual thread, 25h TTL (midnight edge-case buffer)
 - **HTTP headers**: `Retry-After`, `X-RateLimit-Daily-Limit`, `X-RateLimit-Daily-Used`
 
 ### 📨 Event-Driven Message Pipeline
@@ -305,6 +311,8 @@ chatbot-ai-backend/
 │   │   ├── RedisConfig.java               # Redis + Lettuce pool
 │   │   ├── RedisStreamProperties.java     # Stream consumer config
 │   │   ├── RateLimitProperties.java       # Token bucket + daily quota config
+│   │   ├── SemanticCacheConfig.java       # Jedis pool + local embedding model beans
+│   │   ├── SemanticCacheProperties.java   # HNSW tuning + cache behavior config
 │   │   ├── CohereConfig.java             # Cohere Rerank client
 │   │   ├── VirtualThreadConfig.java       # Virtual thread executor
 │   │   └── ...
@@ -355,8 +363,8 @@ chatbot-ai-backend/
 │   │   ├── RedisStreamService.java        # Event-driven message pipeline
 │   │   ├── ChatSessionService.java        # Session CRUD + history management
 │   │   ├── SessionActivityService.java    # Dual ZSET activity tracking
-│   │   ├── RateLimitService.java          # 2-layer rate limiting (Lua)
-│   │   ├── TokenCounterService.java       # JTokkit input token estimation
+│   │   ├── RateLimitService.java          # 2-layer rate limiting (pre-flight check + post-flight consume)
+│   │   ├── SemanticCacheService.java      # Redis HNSW semantic cache (fail-open)
 │   │   ├── ChatMetricsService.java        # Centralized Prometheus metrics
 │   │   ├── SessionCacheService.java       # Session metadata cache
 │   │   ├── DeadLetterQueueService.java    # DLQ handler

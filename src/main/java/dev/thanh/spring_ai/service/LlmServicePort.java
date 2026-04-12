@@ -17,14 +17,18 @@ public interface LlmServicePort {
     /**
      * Stream response từ LLM.
      * <p>
-     * RAG context được xử lý nội bộ qua Tool Calling (Agentic RAG) —
-     * LLM tự quyết định khi nào cần tra cứu knowledge base.
+     * Nội bộ sử dụng {@code .chatResponse()} để capture token usage metadata từ Gemini,
+     * sau đó map về {@code Flux<String>} giữ nguyên contract cũ.
+     * <p>
+     * Post-flight: sau khi stream hoàn thành, totalTokens từ Gemini metadata
+     * được cộng vào daily quota qua {@code RateLimitService.consumeTokens()}.
      *
      * @param userMsg câu hỏi của user
      * @param history lịch sử chat
+     * @param userId  user identifier — dùng cho post-flight quota consumption
      * @return Flux<String> — stream các token
      */
-    Flux<String> streamResponse(String userMsg, List<Message> history);
+    Flux<String> streamResponse(String userMsg, List<Message> history, String userId);
 
     /**
      * Tạo tiêu đề cho session từ câu hỏi đầu tiên.

@@ -91,6 +91,22 @@ rag:
   rerank-top-k: 3
   rerank-model: "rerank-v3.5"
 
+# ── Semantic Cache — Redis HNSW + Local Embedding ────────────────────
+semantic-cache:
+  enabled: true
+  index-name: "idx:semantic_cache"
+  key-prefix: "scache:"
+  embedding-dimension: 384
+  hnsw-m: 16
+  hnsw-ef-construction: 200
+  hnsw-ef-runtime: 10
+  similarity-threshold: 0.88
+  ttl-seconds: 86400          # 24 hours
+  pool-max-total: 16
+  pool-max-idle: 8
+  pool-min-idle: 2
+  pool-borrow-timeout-ms: 50  # Skip cache nếu pool busy
+
 # ── Cohere ─────────────────────────────────────────────────────────────
 cohere:
   api-key: ${COHERE_API_KEY}
@@ -128,7 +144,7 @@ rate-limit:
   bucket-capacity: 5
   refill-rate-per-second: 1
   # Layer 2 — Daily Token Quota
-  daily-token-limit: 100000
+  daily-token-limit: 200000
 
 # ── Retry ──────────────────────────────────────────────────────────────
 retry:

@@ -37,7 +37,6 @@ public class ChatService {
     private final ChatSessionService chatSessionService;
     private final SessionActivityService sessionActivityService;
     private final Executor virtualThreadExecutor;
-    private final TokenCounterService tokenCounterService;
     private final RateLimitService rateLimitService;
     private final ChatMetricsService chatMetrics;
 
@@ -77,14 +76,14 @@ public class ChatService {
                     .flatMapMany(history -> {
                         log.info("History loaded. Size: {}", history.size());
 
-                        // ── Rate Limiting: count input tokens (history + user msg only) ──
-                        // RAG context giờ nằm trong tool execution nội bộ LLM → không count ở đây
-                        int inputTokens = tokenCounterService.countInputTokens(
-                                history, request.message());
-                        rateLimitService.checkDailyTokenQuota(userId, inputTokens);
+                        // ── Pre-flight: CHECK ONLY — không increment ──
+                        // Chỉ kiểm tra xem user đã vượt quota chưa, không cộng thêm.
+                        // Post-flight: totalTokens thực tế từ Gemini metadata
+                        // sẽ được cộng bởi LlmService.doFinally() → RateLimitService.consumeTokens()
+                        rateLimitService.checkDailyTokenQuota(userId);
 
                         return generateStreamResponse(request.message(), history, sessionId, userMessage,
-                                isNewSession);
+                                isNewSession, userId);
                     })
                     .onErrorResume(RateLimitException.class, e -> Flux.error(e))
                     .onErrorResume(e -> !(e instanceof RateLimitException), e -> {
@@ -125,9 +124,9 @@ public class ChatService {
     }
 
     private Flux<ChatResponse> generateStreamResponse(String userMessage, List<Message> history,
-            String sessionId, MessageDTO userMessageDTO, boolean isNewSession) {
+            String sessionId, MessageDTO userMessageDTO, boolean isNewSession, String userId) {
         Flux<ChatResponse> contentStream = createContentStream(userMessage, history, sessionId,
-                userMessageDTO);
+                userMessageDTO, userId);
 
         if (isNewSession) {
             Flux<ChatResponse> titleStream = createTitleStream(userMessage, sessionId);
@@ -138,9 +137,9 @@ public class ChatService {
     }
 
     private Flux<ChatResponse> createContentStream(String userMessage, List<Message> history,
-            String sessionId, MessageDTO userMessageDTO) {
+            String sessionId, MessageDTO userMessageDTO, String userId) {
         StringBuilder contentCollector = new StringBuilder();
-        return llmService.streamResponse(userMessage, history)
+        return llmService.streamResponse(userMessage, history, userId)
                 .doOnNext(contentCollector::append) // Collect tokens regardless of downstream state
                 .map(token -> buildContentResponse(sessionId, token))
                 .doFinally(signal -> handleStreamCompletion(signal, sessionId, contentCollector.toString(),

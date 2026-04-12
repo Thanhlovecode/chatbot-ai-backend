@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -131,26 +132,28 @@ class RateLimitServiceTest {
         @Test
         @DisplayName("checkDailyTokenQuota — when within limit — should not throw")
         void checkDailyTokenQuota_WhenWithinLimit_ShouldNotThrow() {
-                // Given: Redis returns [1 (allowed), 100 (used), 10000 (limit)]
+                // Given: Redis GET returns "100" (well under limit of 10000)
                 stubSafeRedisPassThrough();
-                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                                .thenReturn(List.of(1L, 100L, 10000L));
+                var valueOps = mock(org.springframework.data.redis.core.ValueOperations.class);
+                when(redisTemplate.opsForValue()).thenReturn(valueOps);
+                when(valueOps.get(anyString())).thenReturn("100");
 
                 // When / Then
-                assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 500))
+                assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID))
                                 .doesNotThrowAnyException();
         }
 
         @Test
         @DisplayName("checkDailyTokenQuota — when exceeded — should throw RateLimitException with DAILY_TOKEN_LIMIT_EXCEEDED")
         void checkDailyTokenQuota_WhenExceeded_ShouldThrowRateLimitException() {
-                // Given: Redis returns [0 (blocked), 10000 (used), 10000 (limit)]
+                // Given: Redis GET returns "10000" (equals daily limit)
                 stubSafeRedisPassThrough();
-                when(redisTemplate.execute(any(DefaultRedisScript.class), anyList(), any(), any(), any()))
-                                .thenReturn(List.of(0L, 10000L, 10000L));
+                var valueOps = mock(org.springframework.data.redis.core.ValueOperations.class);
+                when(redisTemplate.opsForValue()).thenReturn(valueOps);
+                when(valueOps.get(anyString())).thenReturn("10000");
 
                 // When / Then
-                assertThatThrownBy(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
+                assertThatThrownBy(() -> rateLimitService.checkDailyTokenQuota(USER_ID))
                                 .isInstanceOf(RateLimitException.class)
                                 .satisfies(ex -> {
                                         RateLimitException rle = (RateLimitException) ex;
@@ -168,7 +171,7 @@ class RateLimitServiceTest {
                 stubSafeRedisFallback();
 
                 // When / Then
-                assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID, 100))
+                assertThatCode(() -> rateLimitService.checkDailyTokenQuota(USER_ID))
                                 .doesNotThrowAnyException();
         }
 }
