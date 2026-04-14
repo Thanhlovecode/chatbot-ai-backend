@@ -1,8 +1,7 @@
 package dev.thanh.spring_ai.service;
 
 import io.micrometer.core.instrument.Timer;
-
-
+import jakarta.annotation.PostConstruct;
 
 import dev.thanh.spring_ai.config.RedisStreamProperties;
 import dev.thanh.spring_ai.dto.request.MessageDTO;
@@ -46,13 +45,49 @@ public class RedisStreamService {
     private final SafeRedisExecutor safeRedis;
     private final ChatMetricsService chatMetrics;
 
+    @PostConstruct
+    public void initConsumerGroup() {
+        String stream = streamProperties.getName();
+        String group  = streamProperties.getConsumerGroup();
+        try {
+            redisTemplate.opsForStream().createGroup(stream, ReadOffset.from("0-0"), group);
+            log.info("✅ Consumer group '{}' created for stream '{}'", group, stream);
+        } catch (Exception e) {
+            handleGroupCreationError(stream, group, e);
+        }
+    }
+
+    private void handleGroupCreationError(String stream, String group, Exception e) {
+        if (rootCauseContains(e, "BUSYGROUP")) {
+            log.info("✅ Consumer group '{}' already exists — reusing", group);
+            return;
+        }
+        if (rootCauseContains(e, "ERR The XGROUP")) {
+            bootstrapStream(stream, group);
+            return;
+        }
+        log.warn("Could not init consumer group '{}': {}", group, e.getMessage());
+    }
+
+    private void bootstrapStream(String stream, String group) {
+        redisTemplate.opsForStream().add(stream, Map.of("init", "true"));
+        redisTemplate.opsForStream().createGroup(stream, ReadOffset.from("0-0"), group);
+        log.info("✅ Stream '{}' bootstrapped with consumer group '{}'", stream, group);
+    }
+
+    private boolean rootCauseContains(Exception e, String keyword) {
+        String msg = e.getMessage();
+        if (msg != null && msg.contains(keyword)) return true;
+        Throwable cause = e.getCause();
+        return cause != null && cause.getMessage() != null && cause.getMessage().contains(keyword);
+    }
 
     /**
      * Push message to Redis Stream — protected by CircuitBreaker.
      * Nếu CB OPEN hoặc Redis fail → fallback direct insert vào PostgreSQL.
      */
     public void pushToStream(MessageDTO messageInfo) {
-        safeRedis.tryExecuteOrElse(
+        safeRedis.tryCriticalExecuteOrElse(
                 () -> {
                     Map<String, String> messageData = new HashMap<>();
                     messageData.put("type", messageInfo.getRole().name());
@@ -69,8 +104,7 @@ public class RedisStreamService {
                             messageInfo.getRole().name(), messageInfo.getSessionId(), recordId);
                 },
                 () -> directDbFallback(messageInfo),
-                "pushToStream"
-        );
+                "pushToStream");
     }
 
     /**
@@ -96,11 +130,8 @@ public class RedisStreamService {
                     return history;
                 },
                 List::of,
-                "getHistory"
-        );
+                "getHistory");
     }
-
-
 
     public void trimStream(long maxLength) {
         safeRedis.tryExecute(
@@ -108,8 +139,7 @@ public class RedisStreamService {
                     redisTemplate.opsForStream().trim(streamProperties.getName(), maxLength, true);
                     log.info("Trimmed stream to max {} messages", maxLength);
                 },
-                "trimStream"
-        );
+                "trimStream");
     }
 
     public boolean hasHistory(String sessionId) {
@@ -120,13 +150,13 @@ public class RedisStreamService {
                     return size != null && size > 0;
                 },
                 () -> false,
-                "hasHistory"
-        );
+                "hasHistory");
     }
 
     /**
      * Pipeline update for history cache — protected by CircuitBreaker.
-     * Nếu CB OPEN → skip cache update, messages đã an toàn trong Redis Stream hoặc DB.
+     * Nếu CB OPEN → skip cache update, messages đã an toàn trong Redis Stream hoặc
+     * DB.
      */
     public void updateHistoryCachePipeline(MessageDTO userMessage, MessageDTO assistantMessage) {
         safeRedis.tryExecute(
@@ -145,8 +175,7 @@ public class RedisStreamService {
                         return null;
                     }
                 }),
-                "updateHistoryCache"
-        );
+                "updateHistoryCache");
     }
 
     public void cacheHistory(String sessionId, List<MessageDTO> messages) {
@@ -161,8 +190,7 @@ public class RedisStreamService {
                     redisTemplate.expire(key, Duration.ofHours(24));
                     log.info("Cached {} messages for session {}", messages.size(), sessionId);
                 },
-                "cacheHistory"
-        );
+                "cacheHistory");
     }
 
     /**
@@ -178,10 +206,8 @@ public class RedisStreamService {
                         log.info("Cleared history cache for session {}", sessionId);
                     }
                 },
-                "clearHistory"
-        );
+                "clearHistory");
     }
-
 
     /**
      * Consume new messages from Redis Stream — NOT protected by CircuitBreaker.
@@ -199,8 +225,7 @@ public class RedisStreamService {
                     StreamReadOptions.empty()
                             .count(streamProperties.getBatchSize())
                             .block(Duration.ofMillis(streamProperties.getBlockDurationMs())),
-                    StreamOffset.create(streamProperties.getName(), ReadOffset.lastConsumed())
-            );
+                    StreamOffset.create(streamProperties.getName(), ReadOffset.lastConsumed()));
 
             if (records == null || records.isEmpty()) {
                 return 0;
@@ -252,13 +277,13 @@ public class RedisStreamService {
     }
 
     private void acknowledgeMessages(List<String> messageIds) {
-        if (messageIds.isEmpty()) return;
+        if (messageIds.isEmpty())
+            return;
         try {
             Long ackedCount = redisTemplate.opsForStream().acknowledge(
                     streamProperties.getName(),
                     streamProperties.getConsumerGroup(),
-                    messageIds.toArray(new String[0])
-            );
+                    messageIds.toArray(new String[0]));
             log.debug("Acknowledged {} messages", ackedCount);
         } catch (Exception e) {
             log.error("Failed to acknowledge messages (non-critical, will retry)", e);
@@ -306,8 +331,7 @@ public class RedisStreamService {
                     streamProperties.getName(),
                     Consumer.from(streamProperties.getConsumerGroup(), streamProperties.getConsumerName()),
                     Range.closed(messageId, messageId),
-                    1L
-            );
+                    1L);
 
             if (pending != null && !pending.isEmpty()) {
                 PendingMessage msg = pending.get(0);

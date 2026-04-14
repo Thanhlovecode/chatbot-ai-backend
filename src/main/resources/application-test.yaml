@@ -21,7 +21,7 @@ spring:
       pool-name: ChatBotPool-Test
       maximum-pool-size: 20           # (cores×2)+1 ≈ 17–20, giữ đúng công thức
       minimum-idle: 10              # Eager-init TẤT CẢ connection sẵn — tránh lazy-create khi burst
-      connection-timeout: 10000       # 10s — đủ buffer cho burst 3000 VU sau khi tối ưu @Transactional
+      connection-timeout: 3000   # 10s — đủ buffer cho burst 3000 VU sau khi tối ưu @Transactional
       idle-timeout: 600000
       max-lifetime: 1800000
       keepalive-time: 60000
@@ -51,10 +51,10 @@ spring:
       lettuce:
         pool:
           enabled: true           # CRITICAL: phải true để kích hoạt pooling, tránh BindException
-          max-active: 50          # Test: dùng 50 như prod để đo đúng bottleneck thực tế
+          max-active: 80
           max-idle: 20
           min-idle: 5
-          max-wait: 2000ms        # 2s — nhất quán với prod
+          max-wait: 3000ms        # 3s — nhất quán với prod
           time-between-eviction-runs: 60000
           test-on-borrow: true
           test-while-idle: true
@@ -106,6 +106,10 @@ rag:
     min-delay-ms: 100                # Minimum latency (Embedding+Search+Rerank)
     max-delay-ms: 500                # Maximum latency
     failure-rate: 0.01               # 1% giả lập failure (RAG ít lỗi hơn LLM)
+
+# ── Tắt Semantic Cache — RAG đã mock, Jedis pool + ONNX model không cần ──
+semantic-cache:
+  enabled: false
 
 # ── Tắt rate limit per-user để flood requests ──────────────────────
 rate-limit:

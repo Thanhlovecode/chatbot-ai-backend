@@ -58,13 +58,13 @@ public class ChatMetricsService {
         // Timer — thời gian mỗi stream (từ subscribe → complete/error)
         this.streamDuration = Timer.builder("chat_stream_duration_seconds")
                 .description("Duration of chat stream responses")
-                .publishPercentiles(0.5, 0.95, 0.99)
+                .publishPercentileHistogram()
                 .register(registry);
 
         // Timer — thời gian batch insert vào PostgreSQL
         this.batchInsertDuration = Timer.builder("redis_batch_insert_seconds")
                 .description("Duration of batch insert operations")
-                .publishPercentiles(0.5, 0.95, 0.99)
+                .publishPercentileHistogram()
                 .register(registry);
     }
 

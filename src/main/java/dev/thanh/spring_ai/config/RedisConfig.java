@@ -130,28 +130,6 @@ public class RedisConfig {
                                 .build();
         }
 
-        /**
-         * Initialize Redis Stream consumer group on startup.
-         * Uses CommandLineRunner instead of returning a boolean bean (anti-pattern).
-         */
-        @Bean
-        public CommandLineRunner initConsumerGroup(RedisTemplate<String, Object> redisTemplate) {
-                return args -> {
-                        try {
-                                redisTemplate.opsForStream().createGroup(
-                                                redisStreamProperties.getName(),
-                                                redisStreamProperties.getConsumerGroup());
-                                log.info("✅ Created consumer group '{}' for stream '{}'",
-                                                redisStreamProperties.getConsumerGroup(),
-                                                redisStreamProperties.getName());
-                        } catch (org.springframework.data.redis.RedisSystemException e) {
-                                // BUSYGROUP — consumer group already exists, which is expected
-                                log.debug("Consumer group '{}' already exists for stream '{}'",
-                                                redisStreamProperties.getConsumerGroup(),
-                                                redisStreamProperties.getName());
-                        }
-                };
-        }
 
         /**
          * Create a copy of the application ObjectMapper with default typing enabled for

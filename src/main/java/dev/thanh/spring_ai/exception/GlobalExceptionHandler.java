@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.catalina.connector.ClientAbortException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -168,6 +169,22 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ResponseData.<Void>builder()
                         .status(HttpStatus.NOT_FOUND.value())
+                        .message(ex.getMessage())
+                        .timestamp(ZonedDateTime.now())
+                        .build());
+    }
+
+    @ExceptionHandler(ServiceDegradedException.class)
+    public ResponseEntity<ResponseData<Void>> handleServiceDegradedException(ServiceDegradedException ex) {
+        log.warn("Service degraded (Redis CB OPEN): {}", ex.getMessage());
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Retry-After", "30");
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .headers(headers)
+                .body(ResponseData.<Void>builder()
+                        .status(HttpStatus.SERVICE_UNAVAILABLE.value())
                         .message(ex.getMessage())
                         .timestamp(ZonedDateTime.now())
                         .build());

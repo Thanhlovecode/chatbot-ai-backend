@@ -2,6 +2,9 @@ package dev.thanh.spring_ai.config;
 
 import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel;
 import lombok.extern.slf4j.Slf4j;
+
+import java.time.Duration;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -37,8 +40,9 @@ public class SemanticCacheConfig {
      * <p>
      * Pool config tuned cho chatbot workload:
      * <ul>
-     *   <li>maxTotal=16 — FT.SEARCH rất nhẹ, 16 connections đủ cho concurrent requests</li>
-     *   <li>borrowTimeout=50ms — skip cache ngay nếu pool busy (fail-open)</li>
+     * <li>maxTotal=16 — FT.SEARCH rất nhẹ, 16 connections đủ cho concurrent
+     * requests</li>
+     * <li>borrowTimeout=50ms — skip cache ngay nếu pool busy (fail-open)</li>
      * </ul>
      */
     @Bean(destroyMethod = "close")
@@ -52,7 +56,7 @@ public class SemanticCacheConfig {
         poolConfig.setMaxTotal(props.getPoolMaxTotal());
         poolConfig.setMaxIdle(props.getPoolMaxIdle());
         poolConfig.setMinIdle(props.getPoolMinIdle());
-        poolConfig.setMaxWait(java.time.Duration.ofMillis(props.getPoolBorrowTimeoutMs()));
+        poolConfig.setMaxWait(Duration.ofMillis(props.getPoolBorrowTimeoutMs()));
         poolConfig.setBlockWhenExhausted(true);
 
         DefaultJedisClientConfig.Builder clientConfigBuilder = DefaultJedisClientConfig.builder()

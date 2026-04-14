@@ -78,11 +78,11 @@ class RedisStreamServiceTest {
                 .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(0)).get());
     }
 
-    private void stubTryExecuteOrElseFallback() {
+    private void stubTryCriticalExecuteOrElseFallback() {
         doAnswer(inv -> {
             ((Runnable) inv.getArgument(1)).run();
             return null;
-        }).when(safeRedis).tryExecuteOrElse(any(Runnable.class), any(Runnable.class), anyString());
+        }).when(safeRedis).tryCriticalExecuteOrElse(any(Runnable.class), any(Runnable.class), anyString());
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -95,7 +95,7 @@ class RedisStreamServiceTest {
         @Test
         @DisplayName("when Redis fails → should fallback to direct DB insert")
         void whenRedisFails_ShouldFallbackToDirectDb() {
-            stubTryExecuteOrElseFallback();
+            stubTryCriticalExecuteOrElseFallback();
             when(batchRepository.singleInsert(any(ChatMessage.class))).thenReturn(true);
 
             redisStreamService.pushToStream(buildMessageDTO(MessageRole.USER, "Hello"));
@@ -106,7 +106,7 @@ class RedisStreamServiceTest {
         @Test
         @DisplayName("when BOTH Redis AND DB fail → should NOT throw (CRITICAL log only)")
         void whenBothFail_ShouldNotThrow() {
-            stubTryExecuteOrElseFallback();
+            stubTryCriticalExecuteOrElseFallback();
             when(batchRepository.singleInsert(any(ChatMessage.class)))
                     .thenThrow(new RuntimeException("DB connection refused"));
 

@@ -95,7 +95,7 @@ public class SessionActivityService {
 
         String userKey = buildUserKey(userId);
 
-        return safeRedis.executeWithFallback(
+        return safeRedis.executeOrReject(
                 () -> {
                     Map<String, LocalDateTime> result = new HashMap<>();
 
@@ -133,7 +133,7 @@ public class SessionActivityService {
      */
     public Long getZSetSize(String userId) {
         String userKey = buildUserKey(userId);
-        return safeRedis.executeWithFallback(
+        return safeRedis.executeOrReject(
                 () -> redisTemplate.opsForZSet().zCard(userKey),
                 () -> 0L,
                 "getZSetSize"
@@ -154,7 +154,7 @@ public class SessionActivityService {
     public Set<ZSetOperations.TypedTuple<Object>> reverseRangeByScoreWithScores(
             String userId, double min, double max, long offset, long count) {
         String userKey = buildUserKey(userId);
-        return safeRedis.executeWithFallback(
+        return safeRedis.executeOrReject(
                 () -> redisTemplate.opsForZSet()
                         .reverseRangeByScoreWithScores(userKey, min, max, offset, count),
                 Collections::emptySet,
@@ -170,7 +170,7 @@ public class SessionActivityService {
     public List<String> getRecentSessionIds(String userId, int limit) {
         String userKey = buildUserKey(userId);
 
-        return safeRedis.executeWithFallback(
+        return safeRedis.executeOrReject(
                 () -> {
                     Set<ZSetOperations.TypedTuple<Object>> tuples = redisTemplate.opsForZSet()
                             .reverseRangeWithScores(userKey, 0, limit - 1);

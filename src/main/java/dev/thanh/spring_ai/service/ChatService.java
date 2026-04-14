@@ -171,7 +171,14 @@ public class ChatService {
             redisStreamService.pushToStream(assistantMessage);
             chatMetrics.incrementRedisStreamPushed();
             redisStreamService.updateHistoryCachePipeline(userMessage, assistantMessage);
-        }, virtualThreadExecutor);
+        }, virtualThreadExecutor).exceptionally(e -> {
+            // Bulkhead full hoặc lỗi khác → assistant message mất khỏi history
+            // User ĐÃ nhận response (stream xong), chỉ mất trong history khi reload
+            log.error("CRITICAL: Failed to persist assistant message for session {}. " +
+                    "Message will be missing from history on reload. Reason: {}",
+                    sessionId, e.getMessage());
+            return null;
+        });
     }
 
     private CompletableFuture<List<Message>> loadHistoryAsync(String sessionId, boolean isNewSession) {
