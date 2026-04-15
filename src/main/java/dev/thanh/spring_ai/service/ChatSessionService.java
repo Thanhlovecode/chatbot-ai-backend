@@ -133,7 +133,8 @@ public class ChatSessionService {
     }
 
     /**
-     * KHÔNG dùng @Transactional ở đây — tránh giữ DB connection khi gọi Redis cache.
+     * KHÔNG dùng @Transactional ở đây — tránh giữ DB connection khi gọi Redis
+     * cache.
      * Chỉ khoanh vùng transaction đúng chỗ cần DB bằng TransactionTemplate.
      */
     public String getOrCreateSession(String sessionId, String userId) {
@@ -164,8 +165,10 @@ public class ChatSessionService {
         UUID sid = UUID.fromString(sessionId);
         UUID uid = UUID.fromString(userId);
 
-        // findByIdAndActiveTrue() tự có @Transactional(readOnly=true) trong SimpleJpaRepository
-        // → connection chỉ bị giữ đúng lúc query (~0.1ms), KHÔNG bao trùm Redis call bên dưới
+        // findByIdAndActiveTrue() tự có @Transactional(readOnly=true) trong
+        // SimpleJpaRepository
+        // → connection chỉ bị giữ đúng lúc query (~0.1ms), KHÔNG bao trùm Redis call
+        // bên dưới
         Session session = sessionRepository.findByIdAndActiveTrue(sid)
                 .orElseThrow(() -> new SessionException(SessionErrorCode.SESSION_NOT_FOUND));
 
@@ -180,9 +183,11 @@ public class ChatSessionService {
     }
 
     /**
-     * KHÔNG dùng @Transactional — phần lớn case trả về từ Redis cache, KHÔNG cần DB connection.
+     * KHÔNG dùng @Transactional — phần lớn case trả về từ Redis cache, KHÔNG cần DB
+     * connection.
      * Chỉ khi cache miss thì mới query DB.
-     * findRecentMessagesBySessionId() tự có @Transactional(readOnly=true) từ Spring Data JPA.
+     * findRecentMessagesBySessionId() tự có @Transactional(readOnly=true) từ Spring
+     * Data JPA.
      */
     public List<Message> prepareHistory(String sessionId, boolean isNewSession) {
         // ── Case 1: Session mới → không cần history, KHÔNG acquire connection ──
@@ -191,15 +196,17 @@ public class ChatSessionService {
         }
 
         // ── Case 2: Redis cache hit → trả về ngay, KHÔNG acquire connection ──
-        if (redisStreamService.hasHistory(sessionId)) {
-            List<MessageDTO> cachedHistory = redisStreamService.getHistory(sessionId);
+        // Gọi getHistory() trực tiếp (1 LRANGE), bỏ hasHistory() (LLEN) → giảm 1 Redis
+        // round-trip
+        List<MessageDTO> cachedHistory = redisStreamService.getHistory(sessionId);
+        if (!cachedHistory.isEmpty()) {
             log.info("Using cached history from Redis: {} messages", cachedHistory.size());
             return convertToSpringMessages(cachedHistory);
         }
 
         // ── Case 3: Cache miss → query DB (connection chỉ giữ đúng lúc SELECT ~2ms) ──
         List<MessageDTO> dbHistory = messageRepository
-                .findRecentMessagesBySessionId(UUID.fromString(sessionId), PageRequest.of(0, 20))
+                .findRecentMessagesBySessionId(UUID.fromString(sessionId), PageRequest.of(0, 10))
                 .stream()
                 .map(this::mapToMessageDTO)
                 .sorted(Comparator.comparing(MessageDTO::getCreatedAt))
@@ -282,7 +289,8 @@ public class ChatSessionService {
         if (tuples == null || tuples.isEmpty()) {
             // Redis đã hết data trong vùng score này (ZSET chỉ cache ~5 trang đầu).
             // Fallback xuống DB để tiếp tục phân trang các trang sâu hơn.
-            // isColdStart=false: KHÔNG warm up vì ZSET đã có top-50, add sessions cũ sẽ bị trim ngay.
+            // isColdStart=false: KHÔNG warm up vì ZSET đã có top-50, add sessions cũ sẽ bị
+            // trim ngay.
             return fallbackToDb(userId, cursor, limit, false);
         }
 
@@ -348,7 +356,8 @@ public class ChatSessionService {
     }
 
     /**
-     * Fallback khi Redis ZSET trống (cold start) hoặc deep pagination vượt quá cache.
+     * Fallback khi Redis ZSET trống (cold start) hoặc deep pagination vượt quá
+     * cache.
      * Query DB theo updated_at DESC, trả kết quả.
      * Chỉ warm up Redis ZSET khi {@code isColdStart=true} — tránh warm up vô nghĩa
      * ở deep pages (sessions cũ sẽ bị trim ngay bởi MAX_ZSET_SIZE).

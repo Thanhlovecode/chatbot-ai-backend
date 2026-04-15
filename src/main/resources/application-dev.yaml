@@ -53,11 +53,11 @@ spring:
         pool:
           enabled: true           # CRITICAL: phải true để kích hoạt pooling, tránh BindException
           max-active: 10
-          max-idle: 5
+          max-idle: 10            # = max-active → loại bỏ Connection Churn
           min-idle: 2
           max-wait: 1000ms
           time-between-eviction-runs: 60000
-          test-on-borrow: true
+          test-on-borrow: false   # TẮT: autoReconnect + test-while-idle + CB đã bảo vệ
           test-while-idle: true
           min-evictable-idle-time: 60000
 

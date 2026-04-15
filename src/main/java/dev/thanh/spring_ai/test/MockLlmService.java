@@ -114,7 +114,8 @@ public class MockLlmService implements LlmServicePort {
                 .doOnSubscribe(s -> log.debug("Mock LLM stream subscribed"))
 
                 // ── Stream status + post-flight token quota (parity với LlmService.doFinally) ──
-                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "success").increment())
+                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "success",
+                        "type", "none").increment())
                 .doOnError(e -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "error",
                         "type", e.getClass().getSimpleName()).increment())
                 .doFinally(signal -> {

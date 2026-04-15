@@ -189,9 +189,9 @@ resilience4j:
       # Redis CB — tuned cho fast detection (Redis operations phải sub-second)
       redis:
         sliding-window-type: COUNT_BASED
-        sliding-window-size: 20               # 10 calls gần nhất — detect nhanh hơn
-        minimum-number-of-calls: 10           # Bắt đầu evaluate sau 5 calls
-        failure-rate-threshold: 60           # OPEN khi ≥50% failure (5/10 calls fail)
+        sliding-window-size: 20               # 20 calls gần nhất — detect nhanh hơn
+        minimum-number-of-calls: 10           # Bắt đầu evaluate sau 10 calls
+        failure-rate-threshold: 60           # OPEN khi ≥60% failure (12/20 calls fail)
         slow-call-rate-threshold: 80          # OPEN khi ≥80% slow calls
         slow-call-duration-threshold: 500ms   # Redis >500ms = slow (bình thường <5ms)
         wait-duration-in-open-state: 30s      # Thử lại sau 30s

@@ -167,7 +167,8 @@ public class LlmService implements LlmServicePort {
                         .onRetryExhaustedThrow((spec, signal) -> signal.failure()))
 
                 // ── Metrics: phân loại kết quả stream ──
-                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "success").increment())
+                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "success",
+                        "type", "none").increment())
                 .doOnError(e -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "error",
                         "type", e.getClass().getSimpleName()).increment())
 

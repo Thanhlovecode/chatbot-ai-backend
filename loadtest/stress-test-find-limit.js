@@ -58,21 +58,25 @@ export const options = {
             stages: [
                 // Phase 1: Ramp → 500 VU
                 { duration: '30s', target: 500 },
-                { duration: '30s',  target: 500 },
+                { duration: '30s', target: 500 },
 
                 // Phase 2: Ramp → 1000 VU
                 { duration: '30s', target: 1000 },
-                { duration: '30s',  target: 1000 },
+                { duration: '30s', target: 1000 },
 
                 // Phase 3: Ramp → 1500 VU
                 { duration: '30s', target: 1500 },
-                { duration: '30s',  target: 1500 },
+                { duration: '1m', target: 1500 },
 
                 // Phase 4: Ramp → 2000 VU
                 { duration: '30s', target: 2000 },
-                { duration: '1m',  target: 2000 },
+                { duration: '1m', target: 2000 },
 
-                // Phase 5: Cooldown
+                // Phase 5: Ramp → 2500 VU
+                { duration: '30s', target: 2500 },
+                { duration: '1m', target: 2500 },
+
+                // Phase 6: Cooldown
                 { duration: '30s', target: 0 },
             ],
         },
@@ -80,7 +84,7 @@ export const options = {
         health_monitor: {
             executor: 'constant-vus',
             vus: 1,
-            duration: '5m',
+            duration: '7m',
             exec: 'healthCheck',
         },
     },
@@ -300,7 +304,7 @@ export function healthCheck() {
 export function setup() {
     console.log('══════════════════════════════════════════════════════');
     console.log('  CHAOS ENGINEERING LOAD TEST — Starting');
-    console.log('  Target: 2000 VU | Duration: 5 min');
+    console.log('  Target: 2500 VU | Duration: 7 min');
     console.log('');
     console.log('  ⚡ Manual chaos commands:');
     console.log('    Kill Redis:    docker kill redis');

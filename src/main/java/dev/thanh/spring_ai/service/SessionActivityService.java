@@ -22,8 +22,10 @@ import java.util.stream.Collectors;
 /**
  * Quản lý 2 Redis ZSETs cho session activity tracking:
  * <ul>
- *   <li><b>ZSET 1 (User Sessions)</b>: {@code chat:user:{userId}:sessions} — phục vụ API đọc danh sách session nhanh</li>
- *   <li><b>ZSET 2 (Global Dirty)</b>: {@code system:dirty_sessions} — phục vụ background scheduler sync xuống DB</li>
+ * <li><b>ZSET 1 (User Sessions)</b>: {@code chat:user:{userId}:sessions} — phục
+ * vụ API đọc danh sách session nhanh</li>
+ * <li><b>ZSET 2 (Global Dirty)</b>: {@code system:dirty_sessions} — phục vụ
+ * background scheduler sync xuống DB</li>
  * </ul>
  *
  * Score = epoch millis (timestamp activity mới nhất).
@@ -40,7 +42,9 @@ public class SessionActivityService {
     private static final String USER_SESSIONS_PREFIX = "chat:user:";
     private static final String USER_SESSIONS_SUFFIX = ":sessions";
     private static final String DIRTY_SESSIONS_KEY = "system:dirty_sessions";
-    /** Giới hạn tối đa số session được cache trong ZSET 1 (~5 trang × pageSize 10). */
+    /**
+     * Giới hạn tối đa số session được cache trong ZSET 1 (~5 trang × pageSize 10).
+     */
     private static final int MAX_ZSET_SIZE = 50;
 
     private final RedisTemplate<String, Object> redisTemplate;
@@ -49,10 +53,10 @@ public class SessionActivityService {
     @Value("${session.sync.user-sessions-ttl-hours:24}")
     private int userSessionsTtlHours;
 
-
     /**
      * Gọi khi user chat trên session (mới hoặc cũ).
-     * Pipeline atomic: cập nhật cả ZSET 1 + ZSET 2 + refresh TTL trong 1 round-trip.
+     * Pipeline atomic: cập nhật cả ZSET 1 + ZSET 2 + refresh TTL trong 1
+     * round-trip.
      */
     public void touchSession(String userId, String sessionId) {
         double score = (double) System.currentTimeMillis();
@@ -63,7 +67,8 @@ public class SessionActivityService {
                     redisTemplate.executePipelined(new SessionCallback<Object>() {
                         @Override
                         @SuppressWarnings("unchecked")
-                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations)
+                                throws DataAccessException {
                             RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
 
                             // ZSET 1: User Sessions — score = timestamp hiện tại
@@ -79,14 +84,14 @@ public class SessionActivityService {
 
                     log.debug("Touched session activity: userId={}, sessionId={}", userId, sessionId);
                 },
-                "touchSession"
-        );
+                "touchSession");
     }
 
     /**
      * Lấy updatedAt từ ZSET 1 cho danh sách sessionIds.
      *
-     * @return Map&lt;sessionId, LocalDateTime&gt; — chỉ chứa entries tồn tại trong ZSET.
+     * @return Map&lt;sessionId, LocalDateTime&gt; — chỉ chứa entries tồn tại trong
+     *         ZSET.
      */
     public Map<String, LocalDateTime> getSessionTimestamps(String userId, List<String> sessionIds) {
         if (sessionIds == null || sessionIds.isEmpty()) {
@@ -103,7 +108,8 @@ public class SessionActivityService {
                     List<Object> scores = redisTemplate.executePipelined(new SessionCallback<Object>() {
                         @Override
                         @SuppressWarnings("unchecked")
-                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations)
+                                throws DataAccessException {
                             RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
                             for (String sessionId : sessionIds) {
                                 ops.opsForZSet().score(userKey, sessionId);
@@ -122,8 +128,7 @@ public class SessionActivityService {
                     return result;
                 },
                 Collections::emptyMap,
-                "getSessionTimestamps"
-        );
+                "getSessionTimestamps");
     }
 
     /**
@@ -136,8 +141,7 @@ public class SessionActivityService {
         return safeRedis.executeOrReject(
                 () -> redisTemplate.opsForZSet().zCard(userKey),
                 () -> 0L,
-                "getZSetSize"
-        );
+                "getZSetSize");
     }
 
     /**
@@ -158,12 +162,12 @@ public class SessionActivityService {
                 () -> redisTemplate.opsForZSet()
                         .reverseRangeByScoreWithScores(userKey, min, max, offset, count),
                 Collections::emptySet,
-                "reverseRangeByScore"
-        );
+                "reverseRangeByScore");
     }
 
     /**
-     * Lấy top N session IDs mới nhất từ ZSET 1 (cho trang đầu tiên khi không có cursor).
+     * Lấy top N session IDs mới nhất từ ZSET 1 (cho trang đầu tiên khi không có
+     * cursor).
      *
      * @return Ordered list, mới nhất trước.
      */
@@ -184,8 +188,7 @@ public class SessionActivityService {
                             .collect(Collectors.toList());
                 },
                 Collections::emptyList,
-                "getRecentSessionIds"
-        );
+                "getRecentSessionIds");
     }
 
     /**
@@ -233,7 +236,8 @@ public class SessionActivityService {
                     redisTemplate.executePipelined(new SessionCallback<Object>() {
                         @Override
                         @SuppressWarnings("unchecked")
-                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations)
+                                throws DataAccessException {
                             RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
 
                             ops.opsForZSet().remove(userKey, sessionId);
@@ -245,15 +249,14 @@ public class SessionActivityService {
 
                     log.info("Removed session {} from activity ZSETs for user {}", sessionId, userId);
                 },
-                "removeSession"
-        );
+                "removeSession");
     }
 
     /**
      * Warm up ZSET 1 từ DB data khi cold start (ZSET trống).
      * Pipeline atomic: ZADD all + TTL trong 1 round-trip.
      *
-     * @param userId     user ID
+     * @param userId        user ID
      * @param sessionScores map sessionId → epoch millis score
      */
     public void warmUpFromDb(String userId, Map<String, Double> sessionScores) {
@@ -268,7 +271,8 @@ public class SessionActivityService {
                     redisTemplate.executePipelined(new SessionCallback<Object>() {
                         @Override
                         @SuppressWarnings("unchecked")
-                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                        public <K, V> Object execute(@NonNull RedisOperations<K, V> operations)
+                                throws DataAccessException {
                             RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
 
                             for (Map.Entry<String, Double> entry : sessionScores.entrySet()) {
@@ -285,8 +289,7 @@ public class SessionActivityService {
 
                     log.info("Warmed up Redis ZSET for user {} with {} sessions", userId, sessionScores.size());
                 },
-                "warmUpFromDb"
-        );
+                "warmUpFromDb");
     }
 
     private String buildUserKey(String userId) {

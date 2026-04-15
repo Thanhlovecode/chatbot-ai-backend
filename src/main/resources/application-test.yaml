@@ -51,12 +51,12 @@ spring:
       lettuce:
         pool:
           enabled: true           # CRITICAL: phải true để kích hoạt pooling, tránh BindException
-          max-active: 80
-          max-idle: 20
-          min-idle: 5
-          max-wait: 3000ms        # 3s — nhất quán với prod
+          max-active: 50
+          max-idle: 50            # = max-active → loại bỏ Connection Churn
+          min-idle: 20            # Pre-warm 20 connections để sẵn sàng cho burst
+          max-wait: 2000ms        # 2s — nhất quán với prod
           time-between-eviction-runs: 60000
-          test-on-borrow: true
+          test-on-borrow: false
           test-while-idle: true
           min-evictable-idle-time: 60000
 
@@ -66,7 +66,7 @@ spring:
     properties:
       hibernate:
         query:
-          in_clause_parameter_padding: true   # Làm tròn IN clause → PostgreSQL reuse cached plan
+          in_clause_parameter_padding: test   # Làm tròn IN clause → PostgreSQL reuse cached plan
 
   # ── Tắt Qdrant + AI auto-configuration (đã mock) ─────────────────
   ai:

@@ -2,7 +2,7 @@
 
 > **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng **Agentic RAG** (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, **Semantic Cache** (Redis HNSW + local MiniLM embedding), và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
 
-[![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk)](https://openjdk.org/)
+[![Java](https://img.shields.io/badge/Java-24-orange?logo=openjdk)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
 [![Spring AI](https://img.shields.io/badge/Spring%20AI-1.1-blue?logo=spring)](https://docs.spring.io/spring-ai/reference/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -56,7 +56,7 @@
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Runtime** | Java 21 (Virtual Threads) | High-concurrency async processing |
+| **Runtime** | Java 24 (Virtual Threads) | High-concurrency async processing |
 | **Framework** | Spring Boot 3.5 | Core framework |
 | **AI / LLM** | Spring AI 1.1 + Google Gemini 2.5 Flash | Chat streaming & embedding |
 | **Embedding** | Gemini Embedding 001 (Matryoshka 768d) | Dual task-type embeddings (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY) |
@@ -181,7 +181,7 @@
 
 ## 📋 Prerequisites
 
-- **Java 21** (JDK) — [Download](https://adoptium.net/)
+- **Java 24** (JDK) — [Download](https://adoptium.net/)
 - **Maven 3.9+** (hoặc dùng Maven Wrapper `./mvnw` đi kèm)
 - **Docker & Docker Compose** — cho PostgreSQL, Redis, Qdrant, Monitoring
 - **OpenSSL** — để generate RSA keys cho JWT

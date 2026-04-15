@@ -22,7 +22,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -34,10 +33,16 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class RedisStreamService {
 
-    private static final int LIMIT_SIZE = 20;
+    private static final int LIMIT_SIZE = 10;
     private static final String HISTORY_PREFIX = "chat:history:";
 
     private final RedisTemplate<String, Object> redisTemplate;
+    /**
+     * Typed template cho history cache — Jackson2JsonRedisSerializer<MessageDTO>.
+     * Không dùng DefaultTyping.NON_FINAL → không reflection, không @class metadata.
+     * Tên field khớp bean name → Spring auto-resolve khi inject.
+     */
+    private final RedisTemplate<String, MessageDTO> historyRedisTemplate;
     private final RedisStreamProperties streamProperties;
     private final MessageProcessorService messageProcessor;
     private final DeadLetterQueueService dlqService;
@@ -48,7 +53,7 @@ public class RedisStreamService {
     @PostConstruct
     public void initConsumerGroup() {
         String stream = streamProperties.getName();
-        String group  = streamProperties.getConsumerGroup();
+        String group = streamProperties.getConsumerGroup();
         try {
             redisTemplate.opsForStream().createGroup(stream, ReadOffset.from("0-0"), group);
             log.info("✅ Consumer group '{}' created for stream '{}'", group, stream);
@@ -77,7 +82,8 @@ public class RedisStreamService {
 
     private boolean rootCauseContains(Exception e, String keyword) {
         String msg = e.getMessage();
-        if (msg != null && msg.contains(keyword)) return true;
+        if (msg != null && msg.contains(keyword))
+            return true;
         Throwable cause = e.getCause();
         return cause != null && cause.getMessage() != null && cause.getMessage().contains(keyword);
     }
@@ -89,12 +95,13 @@ public class RedisStreamService {
     public void pushToStream(MessageDTO messageInfo) {
         safeRedis.tryCriticalExecuteOrElse(
                 () -> {
-                    Map<String, String> messageData = new HashMap<>();
-                    messageData.put("type", messageInfo.getRole().name());
-                    messageData.put("id", messageInfo.getId().toString());
-                    messageData.put("sessionId", messageInfo.getSessionId());
-                    messageData.put("content", messageInfo.getContent());
-                    messageData.put("createdAt", messageInfo.getCreatedAt().toString());
+                    // Map.of() — immutable, pre-sized, zero resize overhead
+                    Map<String, String> messageData = Map.of(
+                            "type", messageInfo.getRole().name(),
+                            "id", messageInfo.getId(),
+                            "sessionId", messageInfo.getSessionId(),
+                            "content", messageInfo.getContent(),
+                            "createdAt", messageInfo.getCreatedAt().toString());
 
                     StringRecord record = StreamRecords.string(messageData)
                             .withStreamKey(streamProperties.getName());
@@ -115,16 +122,13 @@ public class RedisStreamService {
         String key = HISTORY_PREFIX + sessionId;
         return safeRedis.executeWithFallback(
                 () -> {
-                    List<Object> rawHistory = redisTemplate.opsForList().range(key, 0, -1);
+                    // historyRedisTemplate trả về List<MessageDTO> trực tiếp — không cần cast
+                    List<MessageDTO> history = historyRedisTemplate.opsForList().range(key, 0, -1);
 
-                    if (rawHistory == null || rawHistory.isEmpty()) {
+                    if (history == null || history.isEmpty()) {
                         log.info("No history found for session {}", sessionId);
                         return List.<MessageDTO>of();
                     }
-
-                    List<MessageDTO> history = rawHistory.stream()
-                            .map(obj -> (MessageDTO) obj)
-                            .toList();
 
                     log.info("Retrieved history for session {}: {} messages", sessionId, history.size());
                     return history;
@@ -146,7 +150,7 @@ public class RedisStreamService {
         String key = HISTORY_PREFIX + sessionId;
         return safeRedis.executeWithFallback(
                 () -> {
-                    Long size = redisTemplate.opsForList().size(key);
+                    Long size = historyRedisTemplate.opsForList().size(key);
                     return size != null && size > 0;
                 },
                 () -> false,
@@ -160,11 +164,12 @@ public class RedisStreamService {
      */
     public void updateHistoryCachePipeline(MessageDTO userMessage, MessageDTO assistantMessage) {
         safeRedis.tryExecute(
-                () -> redisTemplate.executePipelined(new SessionCallback<Object>() {
+                () -> historyRedisTemplate.executePipelined(new SessionCallback<Object>() {
                     @Override
-                    public <K, V> Object execute(@NonNull RedisOperations<K, V> operations) throws DataAccessException {
+                    public <K, V> Object execute(@NonNull RedisOperations<K, V> operations)
+                            throws DataAccessException {
                         @SuppressWarnings("unchecked")
-                        RedisOperations<String, Object> ops = (RedisOperations<String, Object>) operations;
+                        RedisOperations<String, MessageDTO> ops = (RedisOperations<String, MessageDTO>) operations;
                         String sessionKey = HISTORY_PREFIX + userMessage.getSessionId();
 
                         ops.opsForList().rightPush(sessionKey, userMessage);
@@ -186,8 +191,8 @@ public class RedisStreamService {
         String key = HISTORY_PREFIX + sessionId;
         safeRedis.tryExecute(
                 () -> {
-                    redisTemplate.opsForList().rightPushAll(key, messages.toArray());
-                    redisTemplate.expire(key, Duration.ofHours(24));
+                    historyRedisTemplate.opsForList().rightPushAll(key, messages);
+                    historyRedisTemplate.expire(key, Duration.ofHours(24));
                     log.info("Cached {} messages for session {}", messages.size(), sessionId);
                 },
                 "cacheHistory");
@@ -201,7 +206,7 @@ public class RedisStreamService {
         String key = HISTORY_PREFIX + sessionId;
         safeRedis.tryExecute(
                 () -> {
-                    Boolean deleted = redisTemplate.delete(key);
+                    Boolean deleted = historyRedisTemplate.delete(key);
                     if (Boolean.TRUE.equals(deleted)) {
                         log.info("Cleared history cache for session {}", sessionId);
                     }

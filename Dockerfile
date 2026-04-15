@@ -1,4 +1,4 @@
-FROM maven:3.9.11-amazoncorretto-21-debian AS builder
+FROM maven:3.9.11-eclipse-temurin-24 AS builder
 WORKDIR /app
 
 COPY pom.xml .
@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.m2 \
 
 RUN java -Djarmode=layertools -jar target/*.jar extract --destination target/extracted
 
-FROM amazoncorretto:21.0.9-alpine
+FROM eclipse-temurin:24-jre-alpine
 WORKDIR /app
 
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:+UseStringDeduplication"

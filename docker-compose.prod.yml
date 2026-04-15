@@ -50,9 +50,9 @@ services:
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6334
       # ── CORS ───────────────────────────────────
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:?Error - CORS_ALLOWED_ORIGINS must be set in .env}"
       # ── Cookie ─────────────────────────────────
-      APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-false}
+      APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-true}
     networks:
       - backend
     restart: unless-stopped

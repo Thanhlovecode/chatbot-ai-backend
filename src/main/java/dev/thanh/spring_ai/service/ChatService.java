@@ -216,7 +216,8 @@ public class ChatService {
                 .content(token)
                 .role(MessageRole.ASSISTANT)
                 .type(ResponseType.CONTENT)
-                .timestamp(ZonedDateTime.now())
+                // Bỏ timestamp cho content tokens — tiết kiệm ZonedDateTime.now() + Jackson serialize per token
+                // Timestamp chỉ set cho ERROR/TITLE response (đã có ở buildTitleResponse, error handlers)
                 .build();
     }
 
