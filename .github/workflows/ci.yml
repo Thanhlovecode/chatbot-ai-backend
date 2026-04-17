@@ -158,6 +158,13 @@ jobs:
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           cache: maven
 
+      - name: Cache NVD Database
+        uses: actions/cache@v4
+        with:
+          path: ~/.dependency-check
+          key: ${{ runner.os }}-nvd-db
+          restore-keys: ${{ runner.os }}-nvd-db
+
       - name: OWASP Dependency Check (CVE scan)
         run: mvn dependency-check:check -B
         env:
