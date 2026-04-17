@@ -10,6 +10,8 @@ import lombok.Getter;
 @Getter
 public class SessionException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     private final SessionErrorCode errorCode;
 
     public SessionException(SessionErrorCode errorCode) {

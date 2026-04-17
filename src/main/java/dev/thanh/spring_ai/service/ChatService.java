@@ -23,6 +23,7 @@ import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
@@ -238,7 +239,7 @@ public class ChatService {
     private boolean isClientDisconnect(Throwable e) {
         String msg = e.getMessage();
         if (msg != null) {
-            String lowerMsg = msg.toLowerCase();
+            String lowerMsg = msg.toLowerCase(Locale.ROOT);
             if (lowerMsg.contains("connection reset")
                     || lowerMsg.contains("broken pipe")
                     || lowerMsg.contains("an established connection was aborted")

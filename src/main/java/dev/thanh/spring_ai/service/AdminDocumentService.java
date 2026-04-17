@@ -18,7 +18,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.UUID;
+
+import dev.thanh.spring_ai.utils.SecurityUtils;
 
 @Service
 @RequiredArgsConstructor
@@ -40,10 +43,10 @@ public class AdminDocumentService {
         } else {
             DocumentStatus docStatus;
             try {
-                docStatus = DocumentStatus.valueOf(status.toUpperCase());
+                docStatus = DocumentStatus.valueOf(status.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 throw new BadRequestException("Invalid status value: '" + status
-                        + "'. Allowed values: ALL, " + Arrays.toString(DocumentStatus.values()));
+                        + "'. Allowed values: ALL, " + Arrays.toString(DocumentStatus.values()), e);
             }
             page = documentRepository.findByStatus(docStatus, pageable);
         }
@@ -82,19 +85,19 @@ public class AdminDocumentService {
                         collectionName,
                         filter
                 ).get();
-                log.info("Deleted Qdrant vectors for document id: {}, file_id: {}", id, document.getFileId());
+                log.info("Deleted Qdrant vectors for document id: {}, file_id: {}", SecurityUtils.sanitizeLog(String.valueOf(id)), SecurityUtils.sanitizeLog(document.getFileId()));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt(); // Restore interrupt flag
-                log.error("Interrupted while deleting Qdrant vectors for document id: {}", id, e);
+                log.error("Interrupted while deleting Qdrant vectors for document id: {}", SecurityUtils.sanitizeLog(String.valueOf(id)), e);
                 throw new RuntimeException("Operation interrupted while deleting vectors in Qdrant", e);
             } catch (java.util.concurrent.ExecutionException e) {
-                log.error("Failed to delete Qdrant vectors for document id: {}", id, e);
-                throw new RuntimeException("Failed to delete corresponding vectors in Qdrant", e.getCause());
+                log.error("Failed to delete Qdrant vectors for document id: {}", SecurityUtils.sanitizeLog(String.valueOf(id)), e);
+                throw new RuntimeException("Failed to delete corresponding vectors in Qdrant", e);
             }
         }
         
         // 2. Delete from PostgreSQL
         documentRepository.delete(document);
-        log.info("Deleted document from DB: {}", id);
+        log.info("Deleted document from DB: {}", SecurityUtils.sanitizeLog(String.valueOf(id)));
     }
 }

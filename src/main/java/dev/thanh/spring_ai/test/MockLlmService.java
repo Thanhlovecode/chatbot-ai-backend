@@ -14,7 +14,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadLocalRandom;
+import java.security.SecureRandom;
 
 
 /**
@@ -46,7 +46,10 @@ public class MockLlmService implements LlmServicePort {
     private static final class Metrics {
         static final String STREAM_STATUS = "llm.stream.status";
         static final String TOKEN_USAGE = "llm.token.usage";
+        static final String TAG_RESULT = "result";
     }
+
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     /**
      * Simulated input/output token ratio.
@@ -90,16 +93,16 @@ public class MockLlmService implements LlmServicePort {
         int simulatedTotalTokens = props.getTokensPerResponse() * SIMULATED_TOKEN_MULTIPLIER;
 
         // Giả lập occasional failure
-        if (ThreadLocalRandom.current().nextDouble() < props.getFailureRate()) {
+        if (SECURE_RANDOM.nextDouble() < props.getFailureRate()) {
             log.warn("Mock LLM simulating failure for message: '{}'",
                     userMsg.substring(0, Math.min(30, userMsg.length())));
-            meterRegistry.counter(Metrics.STREAM_STATUS, "result", "error",
+            meterRegistry.counter(Metrics.STREAM_STATUS, Metrics.TAG_RESULT, "error",
                     "type", "SimulatedFailure").increment();
             return Flux.error(new RuntimeException("Mock LLM simulated failure"));
         }
 
         // Random Time To First Byte (giả lập delay, KHÔNG đo TTFB vì mock trả rất nhanh)
-        int ttfb = ThreadLocalRandom.current().nextInt(props.getMinDelayMs(), props.getMaxDelayMs() + 1);
+        int ttfb = SECURE_RANDOM.nextInt(props.getMaxDelayMs() - props.getMinDelayMs() + 1) + props.getMinDelayMs();
 
         log.debug("Mock LLM streaming: ttfb={}ms, tokens={}, interval={}ms, simulatedTotalTokens={}",
                 ttfb, props.getTokensPerResponse(), props.getTokenIntervalMs(), simulatedTotalTokens);
@@ -114,9 +117,9 @@ public class MockLlmService implements LlmServicePort {
                 .doOnSubscribe(s -> log.debug("Mock LLM stream subscribed"))
 
                 // ── Stream status + post-flight token quota (parity với LlmService.doFinally) ──
-                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "success",
+                .doOnComplete(() -> meterRegistry.counter(Metrics.STREAM_STATUS, Metrics.TAG_RESULT, "success",
                         "type", "none").increment())
-                .doOnError(e -> meterRegistry.counter(Metrics.STREAM_STATUS, "result", "error",
+                .doOnError(e -> meterRegistry.counter(Metrics.STREAM_STATUS, Metrics.TAG_RESULT, "error",
                         "type", e.getClass().getSimpleName()).increment())
                 .doFinally(signal -> {
                     // Post-flight: consume simulated tokens (parity với LlmService)
@@ -134,7 +137,7 @@ public class MockLlmService implements LlmServicePort {
         String truncated = userMsg.substring(0, Math.min(25, userMsg.length()));
         return Mono.just("LoadTest — " + truncated)
                 .delayElement(Duration.ofMillis(
-                        ThreadLocalRandom.current().nextInt(50, 200)))
+                        SECURE_RANDOM.nextInt(200 - 50) + 50L))
                 .doOnNext(title -> log.debug("Mock LLM generated title: '{}'", title));
     }
 }

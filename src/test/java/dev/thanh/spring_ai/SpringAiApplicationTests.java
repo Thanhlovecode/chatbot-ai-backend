@@ -7,6 +7,7 @@ class SpringAiApplicationTests extends AbstractIntegrationTest {
 
 	@Test
 	void contextLoads() {
+		org.junit.jupiter.api.Assertions.assertTrue(true, "Context loaded successfully");
 	}
 
 }

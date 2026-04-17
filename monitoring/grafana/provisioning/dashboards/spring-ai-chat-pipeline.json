@@ -12,19 +12,60 @@
       }
     ]
   },
-  "description": "Chat pipeline metrics: streams, latency, errors, Redis batch, and Resilience4j status",
+  "description": "Chat pipeline: key indicators, throughput, latency, pool health, resilience",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
+
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "id": 100,
-      "title": "📊 Overview — Real-time Counters",
+      "title": "🎯 Key Indicators",
       "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.05 },
+              { "color": "red", "value": 0.1 }
+            ]
+          },
+          "unit": "percentunit",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "🔴 Error Rate (5m)",
+      "description": "Tỷ lệ lỗi trên tổng request trong 5 phút. > 5% = WARNING, > 10% = CRITICAL",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "rate(chat_stream_errors_total[5m]) / (rate(chat_requests_total[5m]) > 0)",
+          "legendFormat": "error %",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -43,8 +84,8 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
-      "id": 1,
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
       "options": {
         "colorMode": "background",
         "graphMode": "area",
@@ -74,69 +115,36 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 200 }
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 2 }
             ]
           },
-          "mappings": []
+          "mappings": [
+            { "options": { "0": { "text": "CLOSED ✅", "color": "green" } }, "type": "value" },
+            { "options": { "1": { "text": "HALF_OPEN ⚠️", "color": "orange" } }, "type": "value" },
+            { "options": { "2": { "text": "OPEN 🔴", "color": "red" } }, "type": "value" }
+          ]
         },
         "overrides": []
       },
-      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
-      "id": 2,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "Pending Messages (Redis Stream)",
-      "description": "Số message chưa xử lý trong Redis Stream",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "redis_stream_pending",
-          "legendFormat": "pending",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
       "id": 3,
       "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto"
       },
-      "title": "Total Chat Requests",
-      "description": "Tổng số chat request từ khi app start",
+      "title": "Circuit Breaker State",
+      "description": "0=CLOSED (healthy), 1=HALF_OPEN (testing), 2=OPEN (tripping)",
       "type": "stat",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "chat_requests_total",
-          "legendFormat": "total",
+          "expr": "resilience4j_circuitbreaker_state{name=~\".*\"}",
+          "legendFormat": "{{name}}",
           "refId": "A"
         }
       ]
@@ -150,14 +158,15 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
             ]
           },
           "mappings": []
         },
         "overrides": []
       },
-      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
       "id": 4,
       "options": {
         "colorMode": "background",
@@ -167,91 +176,14 @@
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto"
       },
-      "title": "Stream Errors (Total)",
-      "description": "Tổng số lỗi stream từ khi app start",
+      "title": "⚠️ Lettuce Pool Pending",
+      "description": "Threads đang chờ Redis connection. > 0 liên tục → PHẢI tăng max-active!",
       "type": "stat",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "chat_stream_errors_total",
-          "legendFormat": "errors",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "purple", "value": null }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
-      "id": 5,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "Redis Stream Pushed (Total)",
-      "description": "Tổng messages pushed vào Redis Stream",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "redis_stream_pushed_total",
-          "legendFormat": "pushed",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 5 },
-              { "color": "red", "value": 20 }
-            ]
-          },
-          "unit": "percentunit",
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
-      "id": 6,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "Error Rate (5m)",
-      "description": "Tỷ lệ lỗi trên tổng request trong 5 phút",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(chat_stream_errors_total[5m]) / (rate(chat_requests_total[5m]) > 0)",
-          "legendFormat": "error %",
+          "expr": "lettuce_pool_pending",
+          "legendFormat": "pending",
           "refId": "A"
         }
       ]
@@ -261,7 +193,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
       "id": 101,
-      "title": "⚡ Throughput — Requests & Errors per Second",
+      "title": "⚡ Throughput & Latency",
       "type": "row"
     },
     {
@@ -326,9 +258,9 @@
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
-            "axisLabel": "streams",
+            "axisLabel": "latency",
             "drawStyle": "line",
-            "fillOpacity": 30,
+            "fillOpacity": 15,
             "gradientMode": "scheme",
             "lineInterpolation": "smooth",
             "lineWidth": 2,
@@ -336,22 +268,10 @@
             "showPoints": "auto",
             "spanNulls": false,
             "stacking": { "group": "A", "mode": "none" }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "active streams" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "semi-dark-green", "mode": "fixed" } }
-            ]
           },
-          {
-            "matcher": { "id": "byName", "options": "pending msgs" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "semi-dark-orange", "mode": "fixed" } }
-            ]
-          }
-        ]
+          "unit": "s"
+        },
+        "overrides": []
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
       "id": 11,
@@ -359,31 +279,29 @@
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "title": "Active Streams & Pending Messages (over time)",
-      "description": "Gauge values plotted over time",
+      "title": "Redis Operations Latency (Percentiles)",
+      "description": "P50 / P95 / P99 cho các thao tác Redis (SafeRedisExecutor). Dùng Mean để tính Pool Size, P95/P99 để set timeout.",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "chat_streams_active",
-          "legendFormat": "active streams",
+          "expr": "histogram_quantile(0.5, sum(rate(redis_operation_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "redis_stream_pending",
-          "legendFormat": "pending msgs",
+          "expr": "histogram_quantile(0.95, sum(rate(redis_operation_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p95",
           "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum(rate(redis_operation_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
         }
       ]
-    },
-
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
-      "id": 102,
-      "title": "⏱️ Latency — Stream Duration & Batch Insert",
-      "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -408,7 +326,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "id": 20,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
@@ -461,7 +379,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "id": 21,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
@@ -491,548 +409,13 @@
         }
       ]
     },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "msg/s",
-            "drawStyle": "bars",
-            "fillOpacity": 80,
-            "gradientMode": "scheme",
-            "lineInterpolation": "smooth",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }
-          },
-          "unit": "short"
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "pushed/s" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "semi-dark-purple", "mode": "fixed" } }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
-      "id": 22,
-      "options": {
-        "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Redis Stream Push Rate",
-      "description": "Tốc độ push messages vào Redis Stream (per second)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(redis_stream_pushed_total[1m])",
-          "legendFormat": "pushed/s",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "latency",
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "scheme",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
-      "id": 40,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Redis Operations Latency (Percentiles)",
-      "description": "Tổng hợp P50 / P95 / P99 cho các thao tác của Redis (SafeRedisExecutor)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.5, sum(rate(redis_operation_duration_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p50",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.95, sum(rate(redis_operation_duration_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p95",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.99, sum(rate(redis_operation_duration_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p99",
-          "refId": "C"
-        }
-      ]
-    },
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
-      "id": 103,
-      "title": "🛡️ Resilience4j — Circuit Breaker / Rate Limiter / Bulkhead",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 102,
+      "title": "🏊 Resource Pools — HikariCP & Lettuce",
       "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 },
-              { "color": "red", "value": 2 }
-            ]
-          },
-          "mappings": [
-            { "options": { "0": { "text": "CLOSED", "color": "green" } }, "type": "value" },
-            { "options": { "1": { "text": "HALF_OPEN", "color": "orange" } }, "type": "value" },
-            { "options": { "2": { "text": "OPEN", "color": "red" } }, "type": "value" }
-          ]
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 33 },
-      "id": 30,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "Circuit Breaker State",
-      "description": "0=CLOSED (ok), 1=HALF_OPEN, 2=OPEN (tripping)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "resilience4j_circuitbreaker_state{name=~\".*\"}",
-          "legendFormat": "{{name}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "calls/s",
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "scheme",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 33 },
-      "id": 31,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Circuit Breaker — Call Outcome Rate",
-      "description": "Tốc độ successful / failed / not_permitted calls",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(resilience4j_circuitbreaker_calls_seconds_count{kind=\"successful\"}[1m])",
-          "legendFormat": "{{name}} successful",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(resilience4j_circuitbreaker_calls_seconds_count{kind=\"failed\"}[1m])",
-          "legendFormat": "{{name}} failed",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(resilience4j_circuitbreaker_not_permitted_calls_total[1m])",
-          "legendFormat": "{{name}} not_permitted",
-          "refId": "C"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "",
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "scheme",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 33 },
-      "id": 32,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Rate Limiter & Bulkhead",
-      "description": "Available permits / concurrent calls",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "resilience4j_ratelimiter_available_permissions{name=~\".*\"}",
-          "legendFormat": "{{name}} available permits",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "resilience4j_bulkhead_available_concurrent_calls{name=~\".*\"}",
-          "legendFormat": "{{name}} bulkhead available",
-          "refId": "B"
-        }
-      ]
-    },
-
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 },
-      "id": 200,
-      "title": "🔥 Chaos Engineering — Redis Resilience & Fallback",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 },
-              { "color": "red", "value": 2 }
-            ]
-          },
-          "mappings": [
-            { "options": { "0": { "text": "CLOSED ✅", "color": "green" } }, "type": "value" },
-            { "options": { "1": { "text": "HALF_OPEN ⚠️", "color": "orange" } }, "type": "value" },
-            { "options": { "2": { "text": "OPEN 🔴", "color": "red" } }, "type": "value" }
-          ]
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 42 },
-      "id": 201,
-      "options": {
-        "colorMode": "background_solid",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "🛡️ Redis Circuit Breaker State",
-      "description": "0=CLOSED (healthy), 1=HALF_OPEN (testing), 2=OPEN (Redis down → all ops fallback)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "resilience4j_circuitbreaker_state{name=\"redis\", state=\"open\"}*2 + resilience4j_circuitbreaker_state{name=\"redis\", state=\"half_open\"}*1",
-          "legendFormat": "redis CB",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 42 },
-      "id": 202,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "Redis Fallback Total",
-      "description": "Tổng lần Redis ops fallback (executeWithFallback + tryExecuteOrElse)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(redis_fallback_total) or vector(0)",
-          "legendFormat": "fallbacks",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 42 },
-      "id": 203,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "Redis Skip Total",
-      "description": "Tổng lần Redis ops bị skip (tryExecute — fire-and-forget)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(redis_skip_total) or vector(0)",
-          "legendFormat": "skips",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 42 },
-      "id": 204,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "title": "🔴 Direct DB Fallback (pushToStream)",
-      "description": "Messages persisted directly to PostgreSQL bypassing Redis Stream (zero loss proof)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "redis_fallback_total{op=\"pushToStream\"} or vector(0)",
-          "legendFormat": "direct DB",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "ops/s",
-            "drawStyle": "line",
-            "fillOpacity": 30,
-            "gradientMode": "scheme",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }
-          },
-          "unit": "short"
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byRegexp", "options": ".*fallback.*" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
-            ]
-          },
-          {
-            "matcher": { "id": "byRegexp", "options": ".*skip.*" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 47 },
-      "id": 210,
-      "options": {
-        "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Redis Fallback & Skip Rate (over time)",
-      "description": "Tốc độ fallback/skip ops per second — spike khi Redis die, trở về 0 khi recovery",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(redis_fallback_total[30s])) by (op)",
-          "legendFormat": "fallback: {{op}}",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(redis_skip_total[30s])) by (op)",
-          "legendFormat": "skip: {{op}}",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "calls/s",
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "scheme",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }
-          },
-          "unit": "short"
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byRegexp", "options": ".*failed.*" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
-            ]
-          },
-          {
-            "matcher": { "id": "byRegexp", "options": ".*not_permitted.*" },
-            "properties": [
-              { "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 47 },
-      "id": 211,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Redis CB — Call Outcome Rate",
-      "description": "Successful vs Failed vs Not Permitted calls cho Circuit Breaker 'redis'",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(resilience4j_circuitbreaker_calls_seconds_count{name=\"redis\", kind=\"successful\"}[30s])",
-          "legendFormat": "redis successful",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(resilience4j_circuitbreaker_calls_seconds_count{name=\"redis\", kind=\"failed\"}[30s])",
-          "legendFormat": "redis failed",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(resilience4j_circuitbreaker_not_permitted_calls_total{name=\"redis\"}[30s])",
-          "legendFormat": "redis not_permitted",
-          "refId": "C"
-        }
-      ]
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -1069,17 +452,23 @@
               { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
               { "id": "custom.fillOpacity", "value": 0 }
             ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pending (waiting)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
-      "id": 220,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "id": 30,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "title": "HikariCP — Connection Pool (DB Fallback Load)",
-      "description": "Khi Redis die → direct DB fallback → active connections tăng. Nếu vượt max → bottleneck!",
+      "title": "HikariCP — DB Connection Pool",
+      "description": "Active/Idle/Pending/Max. Khi Redis die → direct DB fallback → active tăng. Pending > 0 = DB bottleneck!",
       "type": "timeseries",
       "targets": [
         {
@@ -1116,7 +505,7 @@
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
-            "axisLabel": "ops/s",
+            "axisLabel": "connections",
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "scheme",
@@ -1131,53 +520,382 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "hit" },
+            "matcher": { "id": "byName", "options": "active" },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+              { "id": "color", "value": { "fixedColor": "semi-dark-green", "mode": "fixed" } }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "error" },
+            "matcher": { "id": "byName", "options": "idle" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "semi-dark-blue", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pending" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "max" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "custom.fillOpacity", "value": 0 }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
-      "id": 221,
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "id": 31,
       "options": {
-        "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "title": "Semantic Cache — Hit / Miss / Error",
-      "description": "Cache hit giảm khi Redis die (Jedis pool timeout → error++). Cache HIT = saved RAG call",
+      "title": "Lettuce — Redis Connection Pool",
+      "description": "Active vs Idle vs Pending. Fixed Pool: active + idle ≈ max. Pending > 0 = cần tăng max-active.",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(semantic_cache_lookup_total{result=\"hit\"}[30s])",
-          "legendFormat": "hit",
+          "expr": "lettuce_pool_active",
+          "legendFormat": "active",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(semantic_cache_lookup_total{result=\"miss\"}[30s])",
-          "legendFormat": "miss",
+          "expr": "lettuce_pool_idle",
+          "legendFormat": "idle",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(semantic_cache_lookup_total{result=\"error\"}[30s])",
-          "legendFormat": "error",
+          "expr": "lettuce_pool_pending",
+          "legendFormat": "pending",
           "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "lettuce_pool_max",
+          "legendFormat": "max",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "conn/s",
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "gradientMode": "scheme",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "created/s" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "semi-dark-orange", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "destroyed/s" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "id": 32,
+      "options": {
+        "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "🔍 Connection Churn Detection",
+      "description": "rate(created) & rate(destroyed). Fixed Pool (min=max=idle) → rate ≈ 0. Nếu rate > 0 liên tục → Connection Churn!",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "rate(lettuce_pool_created_total[1m])",
+          "legendFormat": "created/s",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "rate(lettuce_pool_destroyed_total[1m])",
+          "legendFormat": "destroyed/s",
+          "refId": "B"
+        }
+      ]
+    },
+
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "id": 103,
+      "title": "🛡️ Resilience — Circuit Breaker, Fallback, Cache (click to expand)",
+      "type": "row",
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "calls/s",
+                "drawStyle": "line",
+                "fillOpacity": 15,
+                "gradientMode": "scheme",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" }
+              },
+              "unit": "short"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byRegexp", "options": ".*failed.*" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byRegexp", "options": ".*not_permitted.*" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
+          "id": 40,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "title": "Circuit Breaker — Call Outcome Rate (All CBs)",
+          "description": "Successful / Failed / Not Permitted calls cho mọi Circuit Breaker",
+          "type": "timeseries",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "rate(resilience4j_circuitbreaker_calls_seconds_count{kind=\"successful\"}[1m])",
+              "legendFormat": "{{name}} successful",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "rate(resilience4j_circuitbreaker_calls_seconds_count{kind=\"failed\"}[1m])",
+              "legendFormat": "{{name}} failed",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "rate(resilience4j_circuitbreaker_not_permitted_calls_total[1m])",
+              "legendFormat": "{{name}} not_permitted",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "ops/s",
+                "drawStyle": "line",
+                "fillOpacity": 30,
+                "gradientMode": "scheme",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" }
+              },
+              "unit": "short"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byRegexp", "options": ".*fallback.*" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byRegexp", "options": ".*skip.*" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+          "id": 41,
+          "options": {
+            "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "title": "Redis Fallback & Skip Rate",
+          "description": "Tốc độ fallback/skip ops per second — spike khi Redis die, trở về 0 khi recovery",
+          "type": "timeseries",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "sum(rate(redis_fallback_total[30s])) by (op)",
+              "legendFormat": "fallback: {{op}}",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "sum(rate(redis_skip_total[30s])) by (op)",
+              "legendFormat": "skip: {{op}}",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "drawStyle": "line",
+                "fillOpacity": 15,
+                "gradientMode": "scheme",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" }
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
+          "id": 42,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "title": "Rate Limiter & Bulkhead",
+          "description": "Available permits / concurrent calls",
+          "type": "timeseries",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "resilience4j_ratelimiter_available_permissions{name=~\".*\"}",
+              "legendFormat": "{{name}} available permits",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "resilience4j_bulkhead_available_concurrent_calls{name=~\".*\"}",
+              "legendFormat": "{{name}} bulkhead available",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "ops/s",
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "gradientMode": "scheme",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" }
+              },
+              "unit": "short"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "hit" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "error" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
+          "id": 43,
+          "options": {
+            "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "title": "Semantic Cache — Hit / Miss / Error",
+          "description": "Cache hit giảm khi Redis die. Cache HIT = saved RAG call",
+          "type": "timeseries",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "rate(semantic_cache_lookup_total{result=\"hit\"}[30s])",
+              "legendFormat": "hit",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "rate(semantic_cache_lookup_total{result=\"miss\"}[30s])",
+              "legendFormat": "miss",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+              "expr": "rate(semantic_cache_lookup_total{result=\"error\"}[30s])",
+              "legendFormat": "error",
+              "refId": "C"
+            }
+          ]
         }
       ]
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-  "tags": ["spring-ai", "chat", "resilience4j", "chaos-engineering"],
+  "tags": ["spring-ai", "chat", "resilience4j"],
   "templating": {
     "list": [
       {

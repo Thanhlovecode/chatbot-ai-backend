@@ -62,10 +62,15 @@ class SessionActivityServiceTest {
     // getZSetSize — fallback default value
     // ═══════════════════════════════════════════════════════════════════════
     @Test
-    @DisplayName("getZSetSize — when Redis down — should return 0L (cold start trigger)")
+    @DisplayName("getZSetSize: Redis failure should return 0")
     void getZSetSize_WhenRedisFails_ShouldReturnZero() {
-        stubFallback();
-        assertThat(sessionActivityService.getZSetSize(USER_ID)).isEqualTo(0L);
+        when(safeRedis.executeOrReject(any(), any(), anyString()))
+                .thenAnswer(inv -> {
+                    Supplier<Long> fallback = inv.getArgument(1);
+                    return fallback.get(); // simulate Redis failure -> execute fallback
+                });
+        long size = sessionActivityService.getZSetSize("any_key");
+        assertThat(size).isEqualTo(0L);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

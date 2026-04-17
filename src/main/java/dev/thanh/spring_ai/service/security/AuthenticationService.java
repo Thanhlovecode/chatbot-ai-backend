@@ -166,7 +166,7 @@ public class AuthenticationService {
         String accessToken = tokenService.createAccessToken(user, tokenId);
         String refreshToken = tokenService.createRefreshToken(user, tokenId);
 
-        saveTokenWhiteList(user.getId().toString(), tokenId);
+        saveTokenWhiteList(String.valueOf(user.getId()), tokenId);
 
         return new TokenPair(accessToken, refreshToken);
     }

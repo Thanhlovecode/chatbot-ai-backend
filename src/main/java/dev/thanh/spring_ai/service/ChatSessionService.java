@@ -257,141 +257,82 @@ public class ChatSessionService {
      */
     @Transactional(readOnly = true)
     public CursorResponse<SessionResponse> getUserSessionsCursor(String userId, String cursor, int limit) {
+        int effectiveLimit = Math.clamp(limit, 1, 100);
 
-        // Clamp limit vào [1, 100] — ngăn client gửi limit=999999 query toàn bộ DB
-        limit = Math.clamp(limit, 1, 100);
-
-        // Check Redis ZSET size — cold start fallback nếu trống
         Long zsetSize = sessionActivityService.getZSetSize(userId);
         if (zsetSize == null || zsetSize == 0) {
-            return fallbackToDb(userId, cursor, limit, true);
+            return fallbackToDb(userId, cursor, effectiveLimit, true);
         }
 
-        // Parse cursor → upper bound score (exclusive)
-        // Cursor format: "epochMillis::sessionId" — chỉ cần phần epochMillis cho Redis
-        // ZSET
-        double maxScore = Double.MAX_VALUE;
-        if (StringUtils.hasText(cursor)) {
-            try {
-                String epochPart = cursor.contains("::") ? cursor.split("::")[0] : cursor;
-                maxScore = Double.longBitsToDouble(
-                        Double.doubleToLongBits((double) Long.parseLong(epochPart)) - 1);
-            } catch (NumberFormatException e) {
-                log.warn("Invalid cursor format: {}, falling back to first page", cursor);
-            }
-        }
-
-        // Fetch thêm buffer để bù session bị xóa nhưng vẫn còn trong ZSET
-        int fetchSize = limit + 10;
+        double maxScore = parseCursorForRedisScore(cursor);
+        int fetchSize = effectiveLimit + 10;
         Set<ZSetOperations.TypedTuple<Object>> tuples = sessionActivityService.reverseRangeByScoreWithScores(userId, 0,
                 maxScore, 0, fetchSize);
 
         if (tuples == null || tuples.isEmpty()) {
-            // Redis đã hết data trong vùng score này (ZSET chỉ cache ~5 trang đầu).
-            // Fallback xuống DB để tiếp tục phân trang các trang sâu hơn.
-            // isColdStart=false: KHÔNG warm up vì ZSET đã có top-50, add sessions cũ sẽ bị
-            // trim ngay.
-            return fallbackToDb(userId, cursor, limit, false);
+            return fallbackToDb(userId, cursor, effectiveLimit, false);
         }
 
-        // Collect ordered session IDs từ Redis
+        return buildCursorResponseFromRedis(tuples, effectiveLimit);
+    }
+
+    private double parseCursorForRedisScore(String cursor) {
+        if (StringUtils.hasText(cursor)) {
+            try {
+                String epochPart = cursor.contains("::") ? cursor.split("::")[0] : cursor;
+                return Double.longBitsToDouble(Double.doubleToLongBits((double) Long.parseLong(epochPart)) - 1);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid cursor format: {}, falling back to first page", cursor);
+            }
+        }
+        return Double.MAX_VALUE;
+    }
+
+    private CursorResponse<SessionResponse> buildCursorResponseFromRedis(Set<ZSetOperations.TypedTuple<Object>> tuples, int effectiveLimit) {
         List<String> orderedIds = tuples.stream()
                 .map(t -> (String) t.getValue())
                 .filter(Objects::nonNull)
                 .toList();
 
-        // Batch fetch metadata từ DB (WHERE IN, chỉ active sessions)
-        List<UUID> uuids = orderedIds.stream()
-                .map(UUID::fromString)
-                .toList();
-
+        List<UUID> uuids = orderedIds.stream().map(UUID::fromString).toList();
         Map<String, Session> dbMap = sessionRepository.findActiveByIds(uuids)
-                .stream()
-                .collect(Collectors.toMap(s -> s.getId().toString(), s -> s));
+                .stream().collect(Collectors.toMap(s -> s.getId().toString(), s -> s));
 
-        // Ghép Redis order + DB metadata, skip sessions đã bị xóa
         List<SessionResponse> data = new ArrayList<>();
         Double lastScore = null;
 
         for (ZSetOperations.TypedTuple<Object> tuple : tuples) {
-            if (data.size() >= limit)
-                break;
+            if (data.size() >= effectiveLimit) break;
 
             String sessionId = (String) tuple.getValue();
             Double score = tuple.getScore();
-            if (sessionId == null || score == null)
-                continue;
+            if (sessionId == null || score == null) continue;
 
             Session session = dbMap.get(sessionId);
-            if (session == null)
-                continue; // session bị xóa trong DB, bỏ qua
+            if (session == null) continue;
 
-            LocalDateTime effectiveUpdatedAt = LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli(score.longValue()), ZoneId.systemDefault());
-
+            LocalDateTime effectiveUpdatedAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(score.longValue()), ZoneId.systemDefault());
             data.add(SessionResponse.builder()
-                    .id(sessionId)
-                    .title(session.getTitle())
-                    .createdAt(session.getCreatedAt())
-                    .updatedAt(effectiveUpdatedAt)
-                    .build());
+                    .id(sessionId).title(session.getTitle())
+                    .createdAt(session.getCreatedAt()).updatedAt(effectiveUpdatedAt).build());
             lastScore = score;
         }
 
-        // hasMore: đã fill đủ limit VÀ Redis còn data phía sau
-        boolean hasNext = data.size() == limit && tuples.size() > limit;
-        // Cursor format: epochMillis::sessionId — đảm bảo nhất quán với DB fallback
-        // path
-        String nextCursor = null;
-        if (hasNext && lastScore != null && !data.isEmpty()) {
-            String lastSessionId = data.get(data.size() - 1).id();
-            nextCursor = lastScore.longValue() + "::" + lastSessionId;
-        }
+        boolean hasNext = data.size() == effectiveLimit && tuples.size() > effectiveLimit;
+        String nextCursor = (hasNext && lastScore != null && !data.isEmpty()) ? 
+            (lastScore.longValue() + "::" + data.get(data.size() - 1).id()) : null;
 
-        return CursorResponse.<SessionResponse>builder()
-                .data(data)
-                .nextCursor(nextCursor)
-                .hasNext(hasNext)
-                .build();
+        return CursorResponse.<SessionResponse>builder().data(data).nextCursor(nextCursor).hasNext(hasNext).build();
     }
 
-    /**
-     * Fallback khi Redis ZSET trống (cold start) hoặc deep pagination vượt quá
-     * cache.
-     * Query DB theo updated_at DESC, trả kết quả.
-     * Chỉ warm up Redis ZSET khi {@code isColdStart=true} — tránh warm up vô nghĩa
-     * ở deep pages (sessions cũ sẽ bị trim ngay bởi MAX_ZSET_SIZE).
-     *
-     * @param isColdStart true nếu ZSET hoàn toàn trống, false nếu deep pagination
-     */
-    private CursorResponse<SessionResponse> fallbackToDb(String userId, String cursor, int limit,
-            boolean isColdStart) {
+    private CursorResponse<SessionResponse> fallbackToDb(String userId, String cursor, int limit, boolean isColdStart) {
         log.warn("Falling back to DB for user {} (coldStart={})", userId, isColdStart);
 
-        // Parse cursor: format "epochMillis::sessionId" — cả 2 phần đều được dùng
-        // epochMillis → lastUpdatedAt (cursor chính)
-        // sessionId → lastId (tie-breaker khi 2 session cùng timestamp, tận dụng đủ
-        // index)
-        LocalDateTime lastUpdatedAt = null;
-        UUID lastId = null;
-        if (StringUtils.hasText(cursor)) {
-            try {
-                String[] parts = cursor.split("::");
-                long epochMillis = Long.parseLong(parts[0]);
-                lastUpdatedAt = LocalDateTime.ofInstant(
-                        Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
-                if (parts.length == 2) {
-                    lastId = UUID.fromString(parts[1]);
-                }
-            } catch (Exception e) {
-                log.warn("Invalid DB fallback cursor: {}, falling back to first page", cursor);
-            }
-        }
-
+        CursorFallbackParams params = parseDbCursor(cursor);
         Pageable pageable = PageRequest.of(0, limit + 1);
         List<Session> sessions = sessionRepository.findSessionsCursorBased(
-                UUID.fromString(userId), lastUpdatedAt,
-                lastId, pageable); // lastId làm tie-breaker: tận dụng đủ index (user_id, updated_at, id)
+                UUID.fromString(userId), params.lastUpdatedAt(),
+                params.lastId(), pageable);
 
         boolean hasNext = sessions.size() > limit;
         if (hasNext) {
@@ -407,34 +348,45 @@ public class ChatSessionService {
                         .build())
                 .toList();
 
-        // Warm up Redis ZSET chỉ khi cold start.
-        // Deep pagination (isColdStart=false): ZSET đã có top-50 sessions mới nhất,
-        // add sessions cũ hơn sẽ bị ZREMRANGEBYRANK trim ngay → wasted round-trip.
         if (isColdStart && !sessions.isEmpty()) {
-            Map<String, Double> scores = new LinkedHashMap<>();
-            for (Session s : sessions) {
-                double score = (double) s.getUpdatedAt()
-                        .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-                scores.put(s.getId().toString(), score);
-            }
-            sessionActivityService.warmUpFromDb(userId, scores);
+            warmUpRedisZSet(userId, sessions);
         }
 
-        // Cursor format: "epochMillis::sessionId" — thống nhất với Redis path
-        // epochMillis cho Redis score bound, sessionId làm tie-breaker cho DB query
         String nextCursor = null;
         if (hasNext && !sessions.isEmpty()) {
             Session lastSession = sessions.get(sessions.size() - 1);
-            long epochMillis = lastSession.getUpdatedAt()
-                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            long epochMillis = lastSession.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
             nextCursor = epochMillis + "::" + lastSession.getId();
         }
 
-        return CursorResponse.<SessionResponse>builder()
-                .data(data)
-                .nextCursor(nextCursor)
-                .hasNext(hasNext)
-                .build();
+        return CursorResponse.<SessionResponse>builder().data(data).nextCursor(nextCursor).hasNext(hasNext).build();
+    }
+
+    private record CursorFallbackParams(LocalDateTime lastUpdatedAt, UUID lastId) {}
+
+    private CursorFallbackParams parseDbCursor(String cursor) {
+        if (StringUtils.hasText(cursor)) {
+            try {
+                String[] parts = cursor.split("::");
+                long epochMillis = Long.parseLong(parts[0]);
+                LocalDateTime lastUpdatedAt = LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
+                UUID lastId = parts.length == 2 ? UUID.fromString(parts[1]) : null;
+                return new CursorFallbackParams(lastUpdatedAt, lastId);
+            } catch (Exception e) {
+                log.warn("Invalid DB fallback cursor: {}, falling back to first page", cursor);
+            }
+        }
+        return new CursorFallbackParams(null, null);
+    }
+
+    private void warmUpRedisZSet(String userId, List<Session> sessions) {
+        Map<String, Double> scores = new LinkedHashMap<>();
+        for (Session s : sessions) {
+            double score = (double) s.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            scores.put(s.getId().toString(), score);
+        }
+        sessionActivityService.warmUpFromDb(userId, scores);
     }
 
     @Transactional(readOnly = true)
@@ -442,7 +394,7 @@ public class ChatSessionService {
             int limit) {
 
         // Clamp limit vào [1, 100] — ngăn client gửi limit=999999 query toàn bộ DB
-        limit = Math.clamp(limit, 1, 100);
+        int effectiveLimit = Math.clamp(limit, 1, 100);
 
         UUID sid = UUID.fromString(sessionId);
         UUID uid = UUID.fromString(userId);
@@ -471,16 +423,16 @@ public class ChatSessionService {
             }
         }
 
-        Pageable pageable = PageRequest.of(0, limit + 1);
+        Pageable pageable = PageRequest.of(0, effectiveLimit + 1);
         List<ChatMessage> messages = messageRepository.findMessagesCursorBased(
                 sid,
                 lastCreatedAt,
                 lastId != null ? UUID.fromString(lastId) : null,
                 pageable);
 
-        boolean hasNext = messages.size() > limit;
+        boolean hasNext = messages.size() > effectiveLimit;
         if (hasNext) {
-            messages = messages.subList(0, limit);
+            messages = messages.subList(0, effectiveLimit);
         }
 
         List<ChatMessageResponse> data = messages.stream()

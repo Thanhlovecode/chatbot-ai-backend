@@ -131,7 +131,7 @@ public class GlobalExceptionHandler {
         String message;
         HttpHeaders headers = new HttpHeaders();
 
-        if (ex.getErrorCode().name().equals("TOO_MANY_REQUESTS")) {
+        if ("TOO_MANY_REQUESTS".equals(ex.getErrorCode().name())) {
             message = String.format(ex.getErrorCode().getMessageTemplate(), ex.getRetryAfterSeconds());
             headers.set("Retry-After", String.valueOf(ex.getRetryAfterSeconds()));
             log.warn("Rate limit Layer 1: {}", message);

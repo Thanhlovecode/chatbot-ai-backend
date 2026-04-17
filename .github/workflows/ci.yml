@@ -1,0 +1,248 @@
+name: CI Pipeline — Spring AI Chatbot
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  JAVA_VERSION: '24'
+  JAVA_DISTRIBUTION: 'temurin'
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 0: Secret Scanning — block pipeline if credentials leaked
+  # ═══════════════════════════════════════════════════════════════
+  secret-scan:
+    name: 🔒 Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for scanning all commits
+
+      - name: TruffleHog OSS
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 1: Compile + Unit Tests (Fast — no containers)
+  # ═══════════════════════════════════════════════════════════════
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: [secret-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: Run Unit Tests (parallel, skip integration)
+        run: |
+          mvn test -B \
+            -Dtest='!*IntegrationTest' \
+            -DfailIfNoTests=false \
+            -T 1C
+
+      - name: Upload JaCoCo Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 2: Integration Tests (Testcontainers — PostgreSQL + Redis)
+  # ═══════════════════════════════════════════════════════════════
+  integration-tests:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: Run Integration Tests (Testcontainers)
+        run: |
+          mvn test -B \
+            -Dtest='*IntegrationTest' \
+            -DfailIfNoTests=false
+
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 3: SAST — Static Analysis (Parallel with Integration)
+  # ═══════════════════════════════════════════════════════════════
+  sast-spotbugs:
+    name: 🔍 SpotBugs + FindSecBugs
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: Compile (skip tests)
+        run: mvn compile -B -DskipTests
+
+      - name: Run SpotBugs + Find Security Bugs
+        run: mvn spotbugs:check -B
+
+      - name: Upload SpotBugs Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-report
+          path: target/spotbugsXml.xml
+          retention-days: 7
+
+  sast-pmd:
+    name: 📋 PMD Code Quality
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: Compile (skip tests)
+        run: mvn compile -B -DskipTests
+
+      - name: Run PMD Analysis
+        run: mvn pmd:check -B
+
+      - name: Upload PMD Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmd-report
+          path: target/pmd.xml
+          retention-days: 7
+
+  sast-dependency-check:
+    name: 🛡️ OWASP Dependency Check
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: OWASP Dependency Check (CVE scan)
+        run: mvn dependency-check:check -B
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+
+      - name: Upload Dependency Check Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.html
+          retention-days: 14
+
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 4: SonarQube Quality Gate — aggregate all metrics
+  # ═══════════════════════════════════════════════════════════════
+  sonarqube:
+    name: 📊 SonarQube Quality Gate
+    runs-on: ubuntu-latest
+    needs: [integration-tests, sast-spotbugs, sast-pmd, sast-dependency-check]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # SonarQube needs full history for blame info
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: Download JaCoCo Coverage Report
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+
+      - name: Build + SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          mvn compile sonar:sonar -B -DskipTests \
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.projectKey=Thanhlovecode_chatbot-ai-backend \
+            -Dsonar.organization=thanhlovecode
+
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 5: Docker Build, Scan & Push (only on push to main)
+  # ═══════════════════════════════════════════════════════════════
+  docker:
+    name: 🐳 Docker Build, Scan & Push
+    runs-on: ubuntu-latest
+    needs: [sonarqube]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }} \
+            -t ${{ secrets.DOCKER_USERNAME }}/spring-ai:latest .
+
+      - name: Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Push Docker Image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/spring-ai:latest

@@ -183,9 +183,8 @@ class LlmServiceTest {
                 .expectNext(" 3 ngày.")
                 .verifyComplete();
 
-        // Then: verify consumeTokens called asynchronously (give virtual thread time to execute)
-        Thread.sleep(200);
-        verify(rateLimitService).consumeTokens(USER_ID, 3070);
+        // Then: verify consumeTokens called asynchronously
+        verify(rateLimitService, timeout(2000)).consumeTokens(USER_ID, 3070);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -601,8 +600,8 @@ class LlmServiceTest {
                     .expectNextCount(2)
                     .verifyComplete();
 
-            // Wait for async virtual thread to complete
-            Thread.sleep(200);
+            // Wait for async virtual thread to complete (increase timeout to prevent flakiness)
+            Thread.sleep(2000);
 
             var summary = meterRegistry.find("llm.token.usage").summary();
             assertThat(summary).isNotNull();

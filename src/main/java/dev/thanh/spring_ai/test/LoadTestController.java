@@ -47,7 +47,7 @@ public class LoadTestController {
         TEST_USER_IDS = new String[100];
         for (int i = 0; i < 100; i++) {
             TEST_USER_IDS[i] = UUID.nameUUIDFromBytes(
-                    ("test-user-" + i).getBytes()).toString();
+                    ("test-user-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
         }
     }
 
@@ -64,7 +64,7 @@ public class LoadTestController {
             try {
                 vuIndex = Math.abs(Integer.parseInt(vuHeader)) % 100;
             } catch (NumberFormatException e) {
-                vuIndex = Math.abs(vuHeader.hashCode()) % 100;
+                vuIndex = (vuHeader.hashCode() & Integer.MAX_VALUE) % 100;
             }
         } else {
             vuIndex = (int) (Thread.currentThread().threadId() % 100);

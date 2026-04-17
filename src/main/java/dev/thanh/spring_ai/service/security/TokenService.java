@@ -50,7 +50,7 @@ public class TokenService {
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer(jwtProperties.getIssuer())
                 .subject(user.getEmail())
-                .claim(TokenConstants.CLAIM_USER_ID, user.getId().toString())
+                .claim(TokenConstants.CLAIM_USER_ID, String.valueOf(user.getId()))
                 .claim(TokenConstants.CLAIM_ROLE, user.getRole().name())
                 .claim(TokenConstants.CLAIM_TOKEN_TYPE, tokenType)
                 .issuedAt(now)
