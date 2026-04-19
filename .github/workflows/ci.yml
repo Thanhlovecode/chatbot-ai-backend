@@ -60,6 +60,9 @@ jobs:
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           cache: maven
 
+      - name: Generate ephemeral test keys
+        run: bash scripts/generate-test-keys.sh
+
       - name: Run Unit Tests (parallel, skip integration)
         run: |
           mvn test -B \
@@ -91,6 +94,9 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           cache: maven
+
+      - name: Generate ephemeral test keys
+        run: bash scripts/generate-test-keys.sh
 
       - name: Run Integration Tests (Testcontainers)
         run: |

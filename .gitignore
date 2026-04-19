@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 src/main/resources/keys/
+src/test/resources/keys/
 *.p12
 *.jks
 
