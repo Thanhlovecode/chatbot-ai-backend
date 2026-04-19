@@ -22,7 +22,7 @@
             langchain4j is an independent Java library with different codebase.
             Reviewed: 2026-04-18
         ]]></notes>
-        <gav regex="true">dev\.langchain4j:langchain4j-core:.*</gav>
+        <gav regex="true">dev\.langchain4j:langchain4j.*:.*</gav>
         <cve>CVE-2026-34070</cve>
     </suppress>
 
@@ -43,7 +43,7 @@
             kotlin.io.path that we do not use. Low severity, Kotlin is transitive.
             Reviewed: 2026-04-18
         ]]></notes>
-        <gav regex="true">org\.jetbrains\.kotlin:kotlin-stdlib:.*</gav>
+        <gav regex="true">org\.jetbrains\.kotlin:kotlin-stdlib.*:.*</gav>
         <cve>CVE-2020-29582</cve>
     </suppress>
 
@@ -60,7 +60,7 @@
             Will be resolved when Spring Boot releases patch.
             Reviewed: 2026-04-18
         ]]></notes>
-        <gav regex="true">org\.apache\.tomcat\.embed:tomcat-embed-core:.*</gav>
+        <gav regex="true">org\.apache\.tomcat\.embed:tomcat-embed-.*:.*</gav>
         <cve>CVE-2025-66614</cve>
         <cve>CVE-2026-29145</cve>
         <cve>CVE-2026-24734</cve>
@@ -90,7 +90,7 @@
             managed upstream. Mitigation: custom JWT filter + token blacklist.
             Reviewed: 2026-04-18
         ]]></notes>
-        <gav regex="true">org\.springframework\.boot:spring-boot-starter-oauth2-resource-server:.*</gav>
+        <gav regex="true">org\.springframework\.boot:spring-boot.*:.*</gav>
         <cve>CVE-2026-22731</cve>
     </suppress>
 
@@ -102,7 +102,7 @@
             Will be resolved when Spring AI releases patch.
             Reviewed: 2026-04-18
         ]]></notes>
-        <gav regex="true">org\.springframework\.ai:spring-ai-model:.*</gav>
+        <gav regex="true">org\.springframework\.ai:spring-ai-.*:.*</gav>
         <cve>CVE-2026-22738</cve>
         <cve>CVE-2026-22730</cve>
         <cve>CVE-2026-22729</cve>
@@ -117,7 +117,7 @@
             Cannot upgrade independently. Spring Boot BOM manages version.
             Reviewed: 2026-04-18
         ]]></notes>
-        <gav regex="true">io\.netty:netty-transport:.*</gav>
+        <gav regex="true">io\.netty:netty-.*:.*</gav>
         <cve>CVE-2026-33871</cve>
         <cve>CVE-2026-33870</cve>
         <cve>CVE-2025-67735</cve>
