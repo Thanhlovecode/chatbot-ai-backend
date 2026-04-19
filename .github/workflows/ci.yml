@@ -1,8 +1,10 @@
 name: CI Pipeline — Spring AI Chatbot
 
 on:
+  # push to main = ONLY happens when PR is merged (direct push blocked by Branch Protection)
   push:
-    branches: [main, develop]
+    branches: [main]
+  # pull_request = runs full test pipeline
   pull_request:
     branches: [main]
 
