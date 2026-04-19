@@ -18,7 +18,8 @@ WORKDIR /app
 
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:+UseStringDeduplication"
 
-RUN addgroup -S springgroup && adduser -S spring -G springgroup
+RUN apk upgrade --no-cache && \
+    addgroup -S springgroup && adduser -S spring -G springgroup
 
 EXPOSE 8080
 

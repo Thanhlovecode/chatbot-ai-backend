@@ -263,6 +263,7 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
+          vuln-type: 'os'  # Only scan Alpine OS packages; Java JARs already covered by OWASP stage
 
       - name: Push Docker Image
         run: |
