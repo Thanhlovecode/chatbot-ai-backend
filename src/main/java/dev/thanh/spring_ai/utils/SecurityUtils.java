@@ -25,4 +25,14 @@ public final class SecurityUtils {
                 SecurityContextHolder.getContext().getAuthentication();
         return authentication.getUserId();
     }
+
+    /**
+     * Sanitize input for logging to prevent CRLF injection.
+     */
+    public static String sanitizeLog(String input) {
+        if (input == null) {
+            return "null";
+        }
+        return input.replaceAll("[\r\n\t]", "_");
+    }
 }

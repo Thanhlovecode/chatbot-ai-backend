@@ -99,9 +99,9 @@ class ChatControllerTest {
         // Verify all 3 JWT security beans are properly injected (not null)
         // This confirms @Import(SecurityConfig.class) worked correctly
         // and the context is not bypassing security
-        assert customJwtDecoder != null : "CustomJwtDecoder must be mocked";
-        assert customJwtAuthenticationConverter != null : "CustomJwtAuthenticationConverter must be mocked";
-        assert jwtAuthenticationEntryPoint != null : "JwtAuthenticationEntryPoint must be mocked";
+        org.assertj.core.api.Assertions.assertThat(customJwtDecoder).isNotNull();
+        org.assertj.core.api.Assertions.assertThat(customJwtAuthenticationConverter).isNotNull();
+        org.assertj.core.api.Assertions.assertThat(jwtAuthenticationEntryPoint).isNotNull();
     }
 
     @Test

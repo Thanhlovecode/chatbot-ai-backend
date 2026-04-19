@@ -11,7 +11,13 @@ package dev.thanh.spring_ai.exception;
  */
 public class ServiceDegradedException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     public ServiceDegradedException(String message) {
         super(message);
+    }
+
+    public ServiceDegradedException(String message, Throwable cause) {
+        super(message, cause);
     }
 }

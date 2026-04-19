@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -113,6 +114,6 @@ public class DocumentParserService {
         if (dot < 0 || dot == filename.length() - 1) {
             return "";
         }
-        return filename.substring(dot + 1).toLowerCase();
+        return filename.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 }

@@ -119,27 +119,7 @@ public class LlmService implements LlmServicePort {
                 .doOnSubscribe(s -> log.info("Gemini stream subscribed (tools: JavaKnowledgeTools)"))
 
                 // ── Capture usage metadata + đánh dấu TTFB ──
-                .doOnNext(response -> {
-                    // 1. Capture usage metadata (thường chỉ có ở chunk cuối)
-                    if (response.getMetadata() != null
-                            && response.getMetadata().getUsage() != null) {
-                        Integer total = response.getMetadata().getUsage().getTotalTokens();
-                        if (total != null && total > 0) {
-                            actualTotalTokens.set(total);
-                        }
-                    }
-
-                    // 2. Detect first meaningful token → stop TTFB timer
-                    String content = extractText(response);
-                    if (content != null && !content.isEmpty()) {
-                        if (hasEmittedData.compareAndSet(false, true)) {
-                            if (ttfbStopped.compareAndSet(false, true)) {
-                                ttfbTimer.stop(meterRegistry.timer(Metrics.STREAM_TTFB));
-                            }
-                            log.debug("First token received. Retry disabled from this point.");
-                        }
-                    }
-                })
+                .doOnNext(response -> processStreamResponseMetadata(response, actualTotalTokens, hasEmittedData, ttfbStopped, ttfbTimer))
 
                 // ── Map ChatResponse → String (giữ nguyên contract Flux<String>) ──
                 .map(this::extractContent)
@@ -173,26 +153,7 @@ public class LlmService implements LlmServicePort {
                         "type", e.getClass().getSimpleName()).increment())
 
                 // ── Post-flight: consume quota + stop TTFB fallback ──
-                .doFinally(signal -> {
-                    int totalTokens = actualTotalTokens.get();
-
-                    if (totalTokens > 0) {
-                        // Fire-and-forget trên virtual thread — không block stream pipeline
-                        CompletableFuture.runAsync(() -> {
-                            rateLimitService.consumeTokens(userId, totalTokens);
-                            meterRegistry.summary(Metrics.TOKEN_USAGE).record(totalTokens);
-                            log.info("Post-flight quota: {} total tokens consumed for user={}", totalTokens, userId);
-                        }, virtualThreadExecutor);
-                    } else {
-                        log.warn("No token usage metadata received from Gemini — quota not updated");
-                    }
-
-                    // Fallback TTFB timer nếu stream kết thúc mà chưa có token nào
-                    if (ttfbStopped.compareAndSet(false, true)) {
-                        ttfbTimer.stop(meterRegistry.timer(Metrics.STREAM_TTFB,
-                                "status", "no_token"));
-                    }
-                })
+                .doFinally(signal -> handleStreamFinally(actualTotalTokens, userId, ttfbStopped, ttfbTimer))
 
                 // ── Terminal error handler: normalize lỗi cuối cùng ──
                 .onErrorResume(e -> handleFinalTerminalError(e, hasEmittedData.get()));
@@ -333,5 +294,42 @@ public class LlmService implements LlmServicePort {
         // Log chi tiết server-side nhưng KHÔNG lộ e.getMessage() ra client
         log.error("LlmService terminal error: ", e);
         return Flux.just("Xin lỗi, hệ thống AI gặp sự cố. Vui lòng thử lại sau.");
+    }
+
+    private void processStreamResponseMetadata(ChatResponse response, AtomicInteger actualTotalTokens, 
+                                               AtomicBoolean hasEmittedData, AtomicBoolean ttfbStopped, 
+                                               Timer.Sample ttfbTimer) {
+        if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
+            Integer total = response.getMetadata().getUsage().getTotalTokens();
+            if (total != null && total > 0) {
+                actualTotalTokens.set(total);
+            }
+        }
+
+        String content = extractText(response);
+        if (content != null && !content.isEmpty()) {
+            if (hasEmittedData.compareAndSet(false, true) && ttfbStopped.compareAndSet(false, true)) {
+                ttfbTimer.stop(meterRegistry.timer(Metrics.STREAM_TTFB));
+                log.debug("First token received. Retry disabled from this point.");
+            }
+        }
+    }
+
+    private void handleStreamFinally(AtomicInteger actualTotalTokens, String userId, 
+                                     AtomicBoolean ttfbStopped, Timer.Sample ttfbTimer) {
+        int totalTokens = actualTotalTokens.get();
+        if (totalTokens > 0) {
+            CompletableFuture.runAsync(() -> {
+                rateLimitService.consumeTokens(userId, totalTokens);
+                meterRegistry.summary(Metrics.TOKEN_USAGE).record(totalTokens);
+                log.info("Post-flight quota: {} total tokens consumed for user={}", totalTokens, userId);
+            }, virtualThreadExecutor);
+        } else {
+            log.warn("No token usage metadata received from Gemini — quota not updated");
+        }
+
+        if (ttfbStopped.compareAndSet(false, true)) {
+            ttfbTimer.stop(meterRegistry.timer(Metrics.STREAM_TTFB, "status", "no_token"));
+        }
     }
 }

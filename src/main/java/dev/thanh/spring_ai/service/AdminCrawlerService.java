@@ -21,7 +21,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
+
+import dev.thanh.spring_ai.utils.SecurityUtils;
 
 /**
  * Service handling all admin operations for the Crawler tab of the RAG dashboard.
@@ -47,7 +50,7 @@ public class AdminCrawlerService {
         } else {
             CrawlerPageStatus pageStatus;
             try {
-                pageStatus = CrawlerPageStatus.valueOf(status.toUpperCase());
+                pageStatus = CrawlerPageStatus.valueOf(status.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 throw new BadRequestException("Invalid status value: '" + status
                         + "'. Allowed values: ALL, " + java.util.Arrays.toString(CrawlerPageStatus.values()));
@@ -105,7 +108,7 @@ public class AdminCrawlerService {
                 .build();
 
         source = crawlSourceRepository.save(source);
-        log.info("Added new crawl source: {} ({})", source.getName(), source.getBaseUrl());
+        log.info("Added new crawl source: {} ({})", SecurityUtils.sanitizeLog(source.getName()), SecurityUtils.sanitizeLog(source.getBaseUrl()));
         return toDto(source);
     }
 
@@ -128,7 +131,7 @@ public class AdminCrawlerService {
         }
 
         source = crawlSourceRepository.save(source);
-        log.info("Updated crawl source: {}", id);
+        log.info("Updated crawl source: {}", SecurityUtils.sanitizeLog(String.valueOf(id)));
         return toDto(source);
     }
 
@@ -136,7 +139,7 @@ public class AdminCrawlerService {
         CrawlSource source = crawlSourceRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("CrawlSource", "id", id));
         crawlSchedulerService.triggerCrawl(source, JobType.MANUAL);
-        log.info("Triggered manual crawl for source: {}", id);
+        log.info("Triggered manual crawl for source: {}", SecurityUtils.sanitizeLog(String.valueOf(id)));
     }
 
     // ─── Helpers ───────────────────────────────────────────────────────────────

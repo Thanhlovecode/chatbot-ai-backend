@@ -12,6 +12,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.embedding.EmbeddingModel;
 
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
 /**
  * Base class cho tất cả các Integration Tests hoặc DataJpaTests.
  * Sử dụng pattern Singleton Testcontainers để khởi động Postgres & Redis
@@ -19,6 +22,7 @@ import org.springframework.ai.embedding.EmbeddingModel;
  */
 @SpringBootTest
 @ActiveProfiles("integration")
+@Execution(ExecutionMode.SAME_THREAD)
 public abstract class AbstractIntegrationTest {
 
     @MockitoBean(name = "documentVectorStore")

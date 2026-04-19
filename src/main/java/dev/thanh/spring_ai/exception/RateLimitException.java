@@ -9,6 +9,8 @@ import lombok.Getter;
 @Getter
 public class RateLimitException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     private final RateLimitErrorCode errorCode;
 
     /**

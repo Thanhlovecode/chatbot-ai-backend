@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<ruleset name="Custom PMD Ruleset"
+    xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+    <description>
+        Custom PMD ruleset for Spring AI project
+    </description>
+
+    <!-- Include best practices but exclude GuardLogStatement to override it -->
+    <rule ref="category/java/bestpractices.xml">
+        <exclude name="GuardLogStatement"/>
+    </rule>
+    
+    <!-- Override GuardLogStatement to only enforce on trace and debug -->
+    <rule ref="category/java/bestpractices.xml/GuardLogStatement">
+        <properties>
+            <property name="logLevels" value="trace,debug" />
+        </properties>
+    </rule>
+
+    <!-- Include other default categories -->
+    <rule ref="category/java/errorprone.xml" />
+    <rule ref="category/java/security.xml" />
+</ruleset>

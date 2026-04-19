@@ -29,6 +29,11 @@
 	<properties>
 		<java.version>24</java.version>
 		<spring-ai.version>1.1.0</spring-ai.version>
+		<!-- SonarQube Properties -->
+		<sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
+		<sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+		<sonar.java.spotbugs.reportPaths>${project.build.directory}/spotbugsXml.xml</sonar.java.spotbugs.reportPaths>
+		<sonar.java.pmd.reportPaths>${project.build.directory}/pmd.xml</sonar.java.pmd.reportPaths>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -306,6 +311,29 @@
 		</dependencies>
 	</dependencyManagement>
 
+	<profiles>
+		<!-- LOCAL PROFILE -->
+		<profile>
+			<id>local</id>
+			<activation>
+				<activeByDefault>true</activeByDefault>
+			</activation>
+			<properties>
+				<dependency-check.skip>false</dependency-check.skip>
+				<kev.enabled>false</kev.enabled>
+			</properties>
+		</profile>
+
+		<!-- CI PROFILE -->
+		<profile>
+			<id>ci</id>
+			<properties>
+				<dependency-check.skip>false</dependency-check.skip>
+				<kev.enabled>true</kev.enabled>
+			</properties>
+		</profile>
+	</profiles>
+
 	<build>
 		<plugins>
 			<plugin>
@@ -324,6 +352,116 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Parallel test execution: 1 JVM fork, relying on JUnit 5 threads -->
+					<forkCount>1</forkCount>
+					<reuseForks>true</reuseForks>
+				</configuration>
+			</plugin>
+
+			<!-- ═══ SAST: OWASP Dependency-Check — scan CVE vulnerabilities ═══ -->
+			<plugin>
+				<groupId>org.owasp</groupId>
+				<artifactId>dependency-check-maven</artifactId>
+				<version>12.2.1</version>
+				<configuration>
+					<failBuildOnCVSS>7</failBuildOnCVSS>
+					<nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+					<knownExploitedEnabled>${kev.enabled}</knownExploitedEnabled>
+					<autoUpdate>true</autoUpdate>
+					<format>HTML</format>
+					<connectionTimeout>10000</connectionTimeout>
+					<readTimeout>30000</readTimeout>
+					<dataDirectory>${user.home}/.dependency-check</dataDirectory>
+					<suppressionFiles>
+						<suppressionFile>dependency-check-suppressions.xml</suppressionFile>
+					</suppressionFiles>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>check</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!-- ═══ SAST: SpotBugs + Find Security Bugs — static code analysis ═══ -->
+			<plugin>
+				<groupId>com.github.spotbugs</groupId>
+				<artifactId>spotbugs-maven-plugin</artifactId>
+				<version>4.9.3.0</version>
+				<configuration>
+					<effort>Max</effort>
+					<threshold>Low</threshold>
+					<xmlOutput>true</xmlOutput>
+					<failOnError>false</failOnError>
+					<excludeFilterFile>spotbugs-exclude.xml</excludeFilterFile>
+					<plugins>
+						<plugin>
+							<groupId>com.h3xstream.findsecbugs</groupId>
+							<artifactId>findsecbugs-plugin</artifactId>
+							<version>1.14.0</version>
+						</plugin>
+					</plugins>
+				</configuration>
+			</plugin>
+
+			<!-- ═══ SAST: PMD — code quality rules ═══ -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-pmd-plugin</artifactId>
+				<version>3.26.0</version>
+				<dependencies>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-core</artifactId>
+						<version>7.11.0</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-java</artifactId>
+						<version>7.11.0</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-javascript</artifactId>
+						<version>7.11.0</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-jsp</artifactId>
+						<version>7.11.0</version>
+					</dependency>
+				</dependencies>
+				<configuration>
+					<failOnViolation>false</failOnViolation>
+					<printFailingErrors>true</printFailingErrors>
+					<rulesets>
+						<ruleset>pmd-ruleset.xml</ruleset>
+					</rulesets>
+				</configuration>
+			</plugin>
+
+			<!-- ═══ COVERAGE: JaCoCo — code coverage reporting ═══ -->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>0.8.13</version>
+				<executions>
+					<execution>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>test</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>

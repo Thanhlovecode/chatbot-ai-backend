@@ -15,6 +15,8 @@ import java.util.UUID;
 @Getter
 public class CustomAuthenticationToken extends JwtAuthenticationToken {
 
+    private static final long serialVersionUID = 1L;
+
     private final UUID userId;
 
     public CustomAuthenticationToken(Jwt jwt, Collection<? extends GrantedAuthority> authorities, UUID userId) {

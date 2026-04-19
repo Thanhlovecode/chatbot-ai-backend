@@ -57,4 +57,10 @@ security:
   oauth2:
     google:
       client-id: "mock-google-client-id"
+  jwt:
+    public-key: classpath:keys/public.pem
+    private-key: classpath:keys/private.pem
 
+# ── Tắt Semantic Cache — không cần Jedis pool trên CI ──────────────
+semantic-cache:
+  enabled: false

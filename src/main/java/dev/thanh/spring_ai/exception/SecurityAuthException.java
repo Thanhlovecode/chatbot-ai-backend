@@ -10,6 +10,8 @@ import lombok.Getter;
 @Getter
 public class SecurityAuthException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     private final SecurityErrorCode errorCode;
 
     public SecurityAuthException(SecurityErrorCode errorCode) {

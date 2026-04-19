@@ -185,7 +185,7 @@ public class SessionActivityService {
 
                     return tuples.stream()
                             .map(tuple -> (String) tuple.getValue())
-                            .collect(Collectors.toList());
+                            .toList();
                 },
                 Collections::emptyList,
                 "getRecentSessionIds");

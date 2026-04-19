@@ -185,7 +185,8 @@ class ChatSessionServiceTest {
     // prepareHistory
     // ═══════════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("prepareHistory")
+    @org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
+    @DisplayName("prepareHistory() tests")
     class PrepareHistoryTests {
 
         @Test

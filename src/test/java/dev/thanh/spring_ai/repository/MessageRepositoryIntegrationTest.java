@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Transactional // GIÁP BẢO VỆ 1: Khai báo tường minh để chống State Leakage cho Postgres
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @DisplayName("MessageRepository — Integration Tests (Testcontainers PostgreSQL)")
-class MessageRepositoryTest extends AbstractIntegrationTest {
+class MessageRepositoryIntegrationTest extends AbstractIntegrationTest {
 
 
     @Autowired private MessageRepository messageRepository;

@@ -56,6 +56,9 @@ public class SemanticCacheService {
     private static final String METRIC_EMBED_LATENCY = "semantic_cache.embed_latency";
     private static final String METRIC_LOOKUP_LATENCY = "semantic_cache.lookup_latency";
 
+    private static final String FIELD_CONTEXT = "context";
+    private static final String TAG_RESULT = "result";
+
     private final JedisPooled jedis;
     private final AllMiniLmL6V2QuantizedEmbeddingModel localEmbeddingModel;
     private final SemanticCacheProperties props;
@@ -100,7 +103,7 @@ public class SemanticCacheService {
             // ── Build schema ──
             Schema schema = new Schema()
                     .addTextField("query_text", 1.0)
-                    .addTextField("context", 1.0)
+                    .addTextField(FIELD_CONTEXT, 1.0)
                     .addVectorField("embedding",
                             Schema.VectorField.VectorAlgo.HNSW,
                             Map.of(
@@ -159,14 +162,14 @@ public class SemanticCacheService {
             // ── 2. FT.SEARCH KNN 1 ──
             Query ftQuery = new Query("*=>[KNN 1 @embedding $vec AS score]")
                     .addParam("vec", vectorBytes)
-                    .returnFields("context", "score")
+                    .returnFields(FIELD_CONTEXT, "score")
                     .dialect(2);
 
             SearchResult result = jedis.ftSearch(props.getIndexName(), ftQuery);
 
             // ── 3. Check threshold ──
             if (result.getTotalResults() == 0) {
-                meterRegistry.counter(METRIC_LOOKUP, "result", "miss").increment();
+                meterRegistry.counter(METRIC_LOOKUP, TAG_RESULT, "miss").increment();
                 log.debug("[LOOKUP] No results from FT.SEARCH");
                 return Optional.empty();
             }
@@ -176,22 +179,22 @@ public class SemanticCacheService {
             double similarity = 1.0 - distance;
 
             if (similarity >= props.getSimilarityThreshold()) {
-                String context = doc.getString("context");
-                meterRegistry.counter(METRIC_LOOKUP, "result", "hit").increment();
+                String context = doc.getString(FIELD_CONTEXT);
+                meterRegistry.counter(METRIC_LOOKUP, TAG_RESULT, "hit").increment();
                 log.info("⚡ [CACHE HIT] similarity={} (threshold={}), query=[{}]",
                         String.format("%.4f", similarity), props.getSimilarityThreshold(),
                         truncate(query, 80));
                 return Optional.ofNullable(context);
             }
 
-            meterRegistry.counter(METRIC_LOOKUP, "result", "miss").increment();
+            meterRegistry.counter(METRIC_LOOKUP, TAG_RESULT, "miss").increment();
             log.debug("[CACHE MISS] similarity={} < threshold={}, query=[{}]",
                     String.format("%.4f", similarity), props.getSimilarityThreshold(),
                     truncate(query, 80));
             return Optional.empty();
 
         } catch (Exception e) {
-            meterRegistry.counter(METRIC_LOOKUP, "result", "error").increment();
+            meterRegistry.counter(METRIC_LOOKUP, TAG_RESULT, "error").increment();
             log.warn("⚠️ [LOOKUP ERROR] Cache lookup failed, fallback to RAG: {}", e.getMessage());
             return Optional.empty();
         } finally {
@@ -224,18 +227,18 @@ public class SemanticCacheService {
             // HSET: lưu hash fields
             Map<byte[], byte[]> hash = new HashMap<>();
             hash.put("query_text".getBytes(), query.getBytes());
-            hash.put("context".getBytes(), context.getBytes());
+            hash.put(FIELD_CONTEXT.getBytes(), context.getBytes());
             hash.put("embedding".getBytes(), vectorBytes);
 
             jedis.hset(key.getBytes(), hash);
             jedis.expire(key, props.getTtlSeconds());
 
-            meterRegistry.counter(METRIC_STORE, "result", "success").increment();
+            meterRegistry.counter(METRIC_STORE, TAG_RESULT, "success").increment();
             log.info("📦 [CACHE STORED] key={}, query=[{}], context_length={}, ttl={}s",
                     key, truncate(query, 60), context.length(), props.getTtlSeconds());
 
         } catch (Exception e) {
-            meterRegistry.counter(METRIC_STORE, "result", "error").increment();
+            meterRegistry.counter(METRIC_STORE, TAG_RESULT, "error").increment();
             log.warn("⚠️ [STORE ERROR] Cache store failed (non-blocking): {}", e.getMessage());
         }
     }

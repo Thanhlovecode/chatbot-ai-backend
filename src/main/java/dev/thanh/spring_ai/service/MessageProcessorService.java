@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -69,7 +70,7 @@ public class MessageProcessorService {
     private MessageRole getRole(Map<Object, Object> fields) {
         try {
             String role = get(fields, "type");
-            return role != null ? MessageRole.valueOf(role.toUpperCase()) : MessageRole.USER;
+            return role != null ? MessageRole.valueOf(role.toUpperCase(Locale.ROOT)) : MessageRole.USER;
         } catch (IllegalArgumentException e) {
             return MessageRole.USER;
         }
@@ -89,7 +90,7 @@ public class MessageProcessorService {
             try {
                 return LocalDateTime.parse(strValue);
             } catch (Exception e) {
-                // Ignore, try numeric
+                log.trace("Timestamp parse failed, falling back to numeric: {}", e.getMessage());
             }
 
             long millis = value instanceof Number n ? n.longValue() : Long.parseLong(strValue);

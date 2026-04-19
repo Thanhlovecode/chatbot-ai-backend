@@ -12,7 +12,9 @@ import org.springframework.context.ApplicationEvent;
 @Getter
 public class SessionCreatedEvent extends ApplicationEvent {
 
-    private final Session session;
+    private static final long serialVersionUID = 1L;
+
+    private final transient Session session;
 
     public SessionCreatedEvent(Object source, Session session) {
         super(source);

@@ -48,6 +48,10 @@ public class SafeRedisExecutor {
     private static final String DB_BULKHEAD_NAME = "db-fallback";
     private static final String TIMER_NAME = "redis_operation_duration_seconds";
 
+    private static final String OUTCOME_SUCCESS = "success";
+    private static final String OUTCOME_FALLBACK = "fallback";
+    private static final String COUNTER_FALLBACK = "redis.fallback";
+
     private final CircuitBreaker circuitBreaker;
     private final Bulkhead dbFallbackBulkhead;
     private final MeterRegistry meterRegistry;
@@ -111,11 +115,11 @@ public class SafeRedisExecutor {
         Supplier<T> decorated = CircuitBreaker.decorateSupplier(circuitBreaker, redisOp);
         try {
             T result = decorated.get();
-            sample.stop(getOrCreateTimer(operationTag, "success"));
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_SUCCESS));
             return result;
         } catch (Exception ex) {
-            sample.stop(getOrCreateTimer(operationTag, "fallback"));
-            meterRegistry.counter("redis.fallback", "op", operationTag).increment();
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_FALLBACK));
+            meterRegistry.counter(COUNTER_FALLBACK, "op", operationTag).increment();
             log.warn("[Redis][{}] Falling back. CB state={}, reason={}",
                     operationTag, circuitBreaker.getState(), ex.getMessage());
             return fallback.get();
@@ -145,7 +149,7 @@ public class SafeRedisExecutor {
         Runnable decorated = CircuitBreaker.decorateRunnable(circuitBreaker, redisOp);
         try {
             decorated.run();
-            sample.stop(getOrCreateTimer(operationTag, "success"));
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_SUCCESS));
         } catch (Exception ex) {
             sample.stop(getOrCreateTimer(operationTag, "skip"));
             meterRegistry.counter("redis.skip", "op", operationTag).increment();
@@ -180,11 +184,11 @@ public class SafeRedisExecutor {
         Supplier<T> decorated = CircuitBreaker.decorateSupplier(circuitBreaker, redisOp);
         try {
             T result = decorated.get();
-            sample.stop(getOrCreateTimer(operationTag, "success"));
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_SUCCESS));
             return result;
         } catch (Exception ex) {
-            sample.stop(getOrCreateTimer(operationTag, "fallback"));
-            meterRegistry.counter("redis.fallback", "op", operationTag).increment();
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_FALLBACK));
+            meterRegistry.counter(COUNTER_FALLBACK, "op", operationTag).increment();
             log.warn("[Redis][{}] Critical fallback to DB. CB state={}, reason={}",
                     operationTag, circuitBreaker.getState(), ex.getMessage());
             return executeDbFallback(dbFallback, operationTag);
@@ -207,10 +211,10 @@ public class SafeRedisExecutor {
         Runnable decorated = CircuitBreaker.decorateRunnable(circuitBreaker, redisOp);
         try {
             decorated.run();
-            sample.stop(getOrCreateTimer(operationTag, "success"));
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_SUCCESS));
         } catch (Exception ex) {
-            sample.stop(getOrCreateTimer(operationTag, "fallback"));
-            meterRegistry.counter("redis.fallback", "op", operationTag).increment();
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_FALLBACK));
+            meterRegistry.counter(COUNTER_FALLBACK, "op", operationTag).increment();
             log.warn("[Redis][{}] Critical fallback to DB. CB state={}, reason={}",
                     operationTag, circuitBreaker.getState(), ex.getMessage());
             executeDbFallbackRunnable(dbFallback, operationTag);
@@ -246,7 +250,7 @@ public class SafeRedisExecutor {
         Supplier<T> decorated = CircuitBreaker.decorateSupplier(circuitBreaker, redisOp);
         try {
             T result = decorated.get();
-            sample.stop(getOrCreateTimer(operationTag, "success"));
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_SUCCESS));
             return result;
         } catch (CallNotPermittedException ex) {
             // CB is OPEN → Redis confirmed failing → REJECT non-critical operation
@@ -254,11 +258,11 @@ public class SafeRedisExecutor {
             meterRegistry.counter("redis.rejected", "op", operationTag).increment();
             log.warn("[Redis][{}] CB OPEN — non-critical operation rejected", operationTag);
             throw new ServiceDegradedException(
-                    "Hệ thống đang quá tải, vui lòng thử lại sau.");
+                    "Hệ thống đang quá tải, vui lòng thử lại sau.", ex);
         } catch (Exception ex) {
             // Transient failure (CB still CLOSED/HALF_OPEN) → return safe default
-            sample.stop(getOrCreateTimer(operationTag, "fallback"));
-            meterRegistry.counter("redis.fallback", "op", operationTag).increment();
+            sample.stop(getOrCreateTimer(operationTag, OUTCOME_FALLBACK));
+            meterRegistry.counter(COUNTER_FALLBACK, "op", operationTag).increment();
             log.warn("[Redis][{}] Transient failure, safe default returned. CB state={}",
                     operationTag, circuitBreaker.getState());
             return safeDefault.get();
@@ -279,7 +283,7 @@ public class SafeRedisExecutor {
             log.error("[DB-Bulkhead][{}] Full! max={}, rejecting fallback request",
                     operationTag, dbFallbackBulkhead.getBulkheadConfig().getMaxConcurrentCalls());
             throw new ServiceDegradedException(
-                    "Hệ thống đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.");
+                    "Hệ thống đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.", ex);
         }
     }
 
@@ -292,7 +296,7 @@ public class SafeRedisExecutor {
             log.error("[DB-Bulkhead][{}] Full! max={}, rejecting fallback request",
                     operationTag, dbFallbackBulkhead.getBulkheadConfig().getMaxConcurrentCalls());
             throw new ServiceDegradedException(
-                    "Hệ thống đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.");
+                    "Hệ thống đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.", ex);
         }
     }
 
