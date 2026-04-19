@@ -236,10 +236,48 @@ jobs:
             -Dsonar.organization=thanhlovecode
 
   # ═══════════════════════════════════════════════════════════════
-  # Stage 5: Docker Build, Scan & Push (only on push to main)
+  # Stage 5a: Docker Build + Trivy Scan (PR only — gate before merge)
   # ═══════════════════════════════════════════════════════════════
-  docker:
-    name: 🐳 Docker Build, Scan & Push
+  docker-scan:
+    name: 🐳 Docker Build + Trivy Scan
+    runs-on: ubuntu-latest
+    needs: [integration-tests, sast-spotbugs, sast-pmd, sast-dependency-check]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t spring-ai:scan-${{ github.event.pull_request.head.sha }} .
+
+      - name: Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'spring-ai:scan-${{ github.event.pull_request.head.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          vuln-type: 'os'  # Only scan Alpine OS packages; Java JARs already covered by OWASP stage
+
+      - name: Upload Trivy Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-results.sarif
+          retention-days: 14
+
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 5b: Docker Build & Push (push to main only — after merge)
+  # Trivy already passed in PR pipeline (Stage 5a), so we skip it here.
+  # ═══════════════════════════════════════════════════════════════
+  docker-push:
+    name: 🚀 Docker Push
     runs-on: ubuntu-latest
     needs: [secret-scan]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -261,17 +299,8 @@ jobs:
             -t ${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }} \
             -t ${{ secrets.DOCKER_USERNAME }}/spring-ai:latest .
 
-      - name: Trivy Vulnerability Scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: '${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }}'
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
-          vuln-type: 'os'  # Only scan Alpine OS packages; Java JARs already covered by OWASP stage
-
       - name: Push Docker Image
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }}
           docker push ${{ secrets.DOCKER_USERNAME }}/spring-ai:latest
+
