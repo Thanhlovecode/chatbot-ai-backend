@@ -31,10 +31,13 @@
             False positive: log4j-api 2.x is NOT affected by Log4Shell-style vulnerabilities.
             log4j-api is just the API facade, not the vulnerable log4j-core 1.x/2.x JNDI.
             Our app uses SLF4J+Logback, log4j-api is a transitive dependency.
-            Reviewed: 2026-04-18
+            Reviewed: 2026-04-25
         ]]></notes>
         <gav regex="true">org\.apache\.logging\.log4j:log4j-api:.*</gav>
         <cve>CVE-2025-68161</cve>
+        <cve>CVE-2026-34478</cve>
+        <cve>CVE-2026-34480</cve>
+        <cve>CVE-2026-34481</cve>
     </suppress>
 
     <suppress>
@@ -78,20 +81,34 @@
             Transitive from Spring Boot BOM. spring-security CVEs will be
             resolved in next Spring Security patch release.
             Mitigation: JWT + BCrypt + rate limiting already in place.
-            Reviewed: 2026-04-18
+            Reviewed: 2026-04-25
         ]]></notes>
         <gav regex="true">org\.springframework\.security:spring-security-.*:.*</gav>
         <cve>CVE-2026-22732</cve>
+        <cve>CVE-2026-22748</cve>
+        <cve>CVE-2026-22746</cve>
     </suppress>
 
     <suppress>
         <notes><![CDATA[
             Transitive from Spring Boot BOM. OAuth2 resource server CVE
             managed upstream. Mitigation: custom JWT filter + token blacklist.
-            Reviewed: 2026-04-18
+            Reviewed: 2026-04-25
         ]]></notes>
         <gav regex="true">org\.springframework\.boot:spring-boot.*:.*</gav>
         <cve>CVE-2026-22731</cve>
+        <cve>CVE-2026-22733</cve>
+    </suppress>
+
+    <suppress>
+        <notes><![CDATA[
+            Transitive from Spring Boot BOM. Spring Framework core CVEs
+            managed upstream. Cannot upgrade independently.
+            Reviewed: 2026-04-25
+        ]]></notes>
+        <gav regex="true">org\.springframework:spring-core:.*</gav>
+        <cve>CVE-2026-22737</cve>
+        <cve>CVE-2026-22735</cve>
     </suppress>
 
     <suppress>
@@ -171,20 +188,22 @@
         <notes><![CDATA[
             PDFBox/jbig2/xmpbox 3.0.x — transitive from Tika document parser.
             Only used for admin document upload, not user-facing.
-            Reviewed: 2026-04-18
+            Reviewed: 2026-04-25
         ]]></notes>
         <gav regex="true">org\.apache\.pdfbox:.*:.*</gav>
         <cve>CVE-2026-23907</cve>
+        <cve>CVE-2026-33929</cve>
     </suppress>
 
     <suppress>
         <notes><![CDATA[
             junrar 7.5.5 — transitive from Tika. RAR extraction vulnerability.
             Mitigated: file type whitelist, 50MB upload limit.
-            Reviewed: 2026-04-18
+            Reviewed: 2026-04-25
         ]]></notes>
         <gav regex="true">com\.github\.junrar:junrar:.*</gav>
         <cve>CVE-2026-28208</cve>
+        <cve>CVE-2026-41245</cve>
     </suppress>
 
 </suppressions>

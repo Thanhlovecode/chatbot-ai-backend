@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# Git pre-push hook — Prevents direct pushes to main branch
+# Installed via: git config core.hooksPath .githooks
+#
+
+PROTECTED_BRANCH="main"
+CURRENT_BRANCH=$(git branch --show-current)
+
+if [ "$CURRENT_BRANCH" = "$PROTECTED_BRANCH" ]; then
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    echo "  🚫 DIRECT PUSH TO 'main' IS BLOCKED"
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
+    echo "  You cannot push directly to the '$PROTECTED_BRANCH' branch."
+    echo "  All changes must go through a Pull Request."
+    echo ""
+    echo "  How to fix:"
+    echo "    1. Create a feature branch:"
+    echo "       git checkout -b feat/your-feature"
+    echo ""
+    echo "    2. Push the feature branch:"
+    echo "       git push -u origin feat/your-feature"
+    echo ""
+    echo "    3. Create a Pull Request on GitHub"
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
+    exit 1
+fi
+
+# Validate branch name convention
+BRANCH_PATTERN="^(feat|fix|refactor|chore|ci|security|hotfix|release|test|docs)/"
+
+if ! echo "$CURRENT_BRANCH" | grep -qE "$BRANCH_PATTERN"; then
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    echo "  ⚠️  NON-STANDARD BRANCH NAME"
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
+    echo "  Branch: $CURRENT_BRANCH"
+    echo ""
+    echo "  Recommended format: <type>/<description>"
+    echo "  Valid types: feat, fix, refactor, chore, ci,"
+    echo "               security, hotfix, release, test, docs"
+    echo ""
+    echo "  This is a WARNING — push will proceed."
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
+    # Warning only, don't block
+fi
+
+exit 0

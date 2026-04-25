@@ -13,15 +13,18 @@ RUN --mount=type=cache,target=/root/.m2 \
 
 RUN java -Djarmode=layertools -jar target/*.jar extract --destination target/extracted
 
-FROM eclipse-temurin:24-jre-alpine
+FROM eclipse-temurin:24-jre-noble
 WORKDIR /app
 
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:+UseStringDeduplication"
 
-RUN apk upgrade --no-cache && \
-    addgroup -S springgroup && adduser -S spring -G springgroup
+RUN apt-get update && apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd -r springgroup && useradd -r -g springgroup spring
 
 EXPOSE 8080
+
+RUN mkdir -p /var/log/spring-ai && chown spring:springgroup /var/log/spring-ai
 
 COPY --from=builder --chown=spring:springgroup /app/target/extracted/dependencies/ ./
 COPY --from=builder --chown=spring:springgroup /app/target/extracted/spring-boot-loader/ ./
@@ -30,4 +33,4 @@ COPY --from=builder --chown=spring:springgroup /app/target/extracted/application
 
 USER spring
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS org.springframework.boot.loader.launch.JarLauncher"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dspring.config.location=classpath:/application.yaml,classpath:/application-${SPRING_PROFILES_ACTIVE:-dev}.yaml org.springframework.boot.loader.launch.JarLauncher"]

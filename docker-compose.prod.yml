@@ -27,8 +27,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "8080:8080"
+    # Port 8080 chỉ expose nội bộ Docker network, KHÔNG ra internet
+    # Nginx (frontend) truy cập qua shared-network → http://spring-ai:8080
+    expose:
+      - "8080"
     environment:
       SPRING_PROFILES_ACTIVE: prod
       TZ: Asia/Ho_Chi_Minh
@@ -53,17 +55,14 @@ services:
       CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:?Error - CORS_ALLOWED_ORIGINS must be set in .env}"
       # ── Cookie ─────────────────────────────────
       APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-true}
+      # ── Admin Seeding ────────────────────────────
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     networks:
-      - backend
+      - backend          # Network nội bộ: postgres, redis, qdrant
+      - shared-network    # Network chia sẻ: Nginx frontend gọi vào đây
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1024M
-        reservations:
-          cpus: '0.25'
-          memory: 512M
+    mem_limit: 768m
+    cpus: 1.0
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
       interval: 30s
@@ -101,14 +100,8 @@ services:
     networks:
       - backend
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-        reservations:
-          cpus: '0.10'
-          memory: 128M
+    mem_limit: 256m
+    cpus: 0.5
     logging:
       driver: "json-file"
       options:
@@ -133,14 +126,8 @@ services:
     networks:
       - backend
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-        reservations:
-          cpus: '0.10'
-          memory: 128M
+    mem_limit: 256m
+    cpus: 0.5
     logging:
       driver: "json-file"
       options:
@@ -158,11 +145,8 @@ services:
     networks:
       - backend
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 128M
+    mem_limit: 64m
+    cpus: 0.25
     logging:
       driver: "json-file"
       options:
@@ -179,11 +163,8 @@ services:
     networks:
       - backend
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 128M
+    mem_limit: 64m
+    cpus: 0.25
     logging:
       driver: "json-file"
       options:
@@ -192,19 +173,21 @@ services:
 
   # ── PostgreSQL ──────────────────────────────────────────────────────
   postgres:
-    shm_size: 256mb
+    shm_size: 128mb
+    mem_limit: 768m
+    cpus: 1.0
     command: >
       postgres
       -c timezone='Asia/Ho_Chi_Minh'
       -c log_timezone='Asia/Ho_Chi_Minh'
-      -c shared_buffers=512MB
-      -c effective_cache_size=1536MB
+      -c shared_buffers=256MB
+      -c effective_cache_size=512MB
       -c work_mem=8MB
-      -c maintenance_work_mem=256MB
-      -c autovacuum_work_mem=64MB
-      -c wal_buffers=16MB
-      -c min_wal_size=256MB
-      -c max_wal_size=1GB
+      -c maintenance_work_mem=64MB
+      -c autovacuum_work_mem=32MB
+      -c wal_buffers=8MB
+      -c min_wal_size=80MB
+      -c max_wal_size=512MB
       -c checkpoint_completion_target=0.9
       -c random_page_cost=1.1
       -c max_connections=100
@@ -212,14 +195,11 @@ services:
       -c log_min_duration_statement=250
       -c log_checkpoints=on
       -c log_lock_waits=on
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 2048M
 
   # ── Redis ───────────────────────────────────────────────────────────
   redis:
+    mem_limit: 512m
+    cpus: 0.5
     command: >
       redis-server 
       --requirepass ${REDIS_PASSWORD:-thanhdeptrai}
@@ -228,25 +208,21 @@ services:
       --save 900 1
       --save 300 10
       --save 60 10000
-      --maxmemory 768mb 
+      --maxmemory 384mb 
       --maxmemory-policy allkeys-lru
       --tcp-backlog 1024
       --timeout 300
       --tcp-keepalive 60
       --hz 50
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 1024M
 
   # ── Qdrant ──────────────────────────────────────────────────────────
   qdrant:
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1024M
+    mem_limit: 512m
+    cpus: 1.0
+
+networks:
+  shared-network:
+    external: true    # Tạo trước bằng: docker network create shared-network
 
 volumes:
   prometheus_data:

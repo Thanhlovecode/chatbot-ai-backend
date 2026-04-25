@@ -126,7 +126,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics       # KHÔNG expose info, env, beans trên prod
+        include: health,metrics,prometheus  # prometheus: cho Prometheus scrape metrics
   endpoint:
     health:
       show-details: never             # Không lộ detail cho người ngoài
