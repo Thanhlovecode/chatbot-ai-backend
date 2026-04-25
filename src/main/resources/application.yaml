@@ -13,6 +13,10 @@ spring:
     virtual:
       enabled: true
 
+  # ── JMX — tắt trong container (đã có Prometheus/Grafana thay thế) ──
+  jmx:
+    enabled: false
+
   # ── Multipart Upload ───────────────────────────────────────────────
   servlet:
     multipart:
@@ -163,6 +167,11 @@ security:
   oauth2:
     google:
       client-id: ${GOOGLE_CLIENT_ID}
+
+# ── Admin Seeding ──────────────────────────────────────────────────────
+app:
+  admin:
+    emails: ${ADMIN_EMAILS:}   # Comma-separated, e.g. "admin@gmail.com,boss@gmail.com"
 
 # ── Resilience4j ───────────────────────────────────────────────────────
 resilience4j:
